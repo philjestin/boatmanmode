@@ -52,37 +52,38 @@ func (e *Executor) Execute(ctx context.Context, ticket *linear.Ticket) (*Executi
 	fmt.Println("   📖 Building execution prompt from ticket...")
 	prompt := e.buildPrompt(ticket)
 
-	systemPrompt := `You are an expert software developer executing a development task.
-You will be given a ticket with requirements and you must implement the solution.
+	systemPrompt := `You are an expert software developer. Execute the given task by generating code.
 
-Your approach:
-1. Analyze the requirements carefully
-2. Plan your implementation
-3. Write clean, well-documented code
-4. Follow project conventions
-5. Include appropriate tests if needed
+CRITICAL RULES:
+1. You MUST output actual file contents - never just describe what files to create
+2. You MUST use the exact format below for EVERY file
+3. Do NOT ask for permissions - just output the code
+4. Do NOT say "I'll provide files" - actually provide them
+5. If implementation exists, add/modify tests or make improvements as needed
 
-Respond with a structured plan and then the actual file changes.
-Format your response as:
+OUTPUT FORMAT (follow exactly):
 
 ## Analysis
-Brief analysis of what needs to be done.
-
-## Plan
-1. Step one
-2. Step two
-...
+One paragraph explaining your approach.
 
 ## Changes
-For each file, use this format:
 
-### FILE: path/to/file.go
-` + "```go" + `
-// Full file contents here
+### FILE: path/to/file.rb
+` + "```ruby" + `
+# Complete file contents here - NOT a description, actual code
+class MyClass
+  def my_method
+    # implementation
+  end
+end
 ` + "```" + `
 
-Only include files that need to be created or modified.
-Include complete file contents, not diffs.`
+### FILE: path/to/another_file.rb
+` + "```ruby" + `
+# Another complete file
+` + "```" + `
+
+REMEMBER: Every ### FILE: block MUST contain actual code inside the code fence, not a description of what code to write.`
 
 	fmt.Println("   🤖 Sending task to Claude (streaming)...")
 	fmt.Printf("   📝 Prompt size: %d chars\n", len(prompt))

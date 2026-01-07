@@ -1,6 +1,6 @@
 # BoatmanMode 🚣
 
-An AI-powered development agent that automates ticket execution with peer review. BoatmanMode fetches tickets from Linear, generates code using Claude, reviews changes with ScottBott (a peer-review AI skill), iterates until quality passes, and creates pull requests.
+An AI-powered development agent that automates ticket execution with peer review. BoatmanMode fetches tickets from Linear, generates code using Claude, reviews changes with the `peer-review` skill, iterates until quality passes, and creates pull requests.
 
 ## Architecture
 
@@ -11,12 +11,9 @@ An AI-powered development agent that automates ticket execution with peer review
 │  ┌─────────────┐    ┌─────────────────────────────────────────────────────┐ │
 │  │   Linear    │───▶│                   Workflow Engine                    │ │
 │  │  (tickets)  │    │                                                       │ │
-│  └─────────────┘    │  1. Fetch ticket                                      │ │
-│                     │  2. Create git worktree                               │ │
-│                     │  3. Execute task (Claude)                             │ │
-│                     │  4. Review (ScottBott)                                │ │
-│                     │  5. Refactor loop until pass                          │ │
-│                     │  6. Create PR (gh CLI)                                │ │
+│  └─────────────┘    │  1. Fetch ticket         4. Review (peer-review)     │ │
+│                     │  2. Create worktree      5. Refactor loop            │ │
+│                     │  3. Execute (Claude)     6. Create PR (gh)           │ │
 │                     └─────────────────────────────────────────────────────┘ │
 │                                        │                                      │
 │            ┌───────────────────────────┼───────────────────────────┐         │
@@ -24,52 +21,41 @@ An AI-powered development agent that automates ticket execution with peer review
 │  ┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐    │
 │  │ tmux: executor  │       │ tmux: reviewer-1│       │ tmux: refactor-1│    │
 │  │ ┌─────────────┐ │       │ ┌─────────────┐ │       │ ┌─────────────┐ │    │
-│  │ │   Claude    │ │       │ │  ScottBott  │ │       │ │   Claude    │ │    │
-│  │ │  (coding)   │ │       │ │  (review)   │ │       │ │ (refactor)  │ │    │
+│  │ │   Claude    │ │       │ │ peer-review │ │       │ │   Claude    │ │    │
+│  │ │  (coding)   │ │       │ │   skill     │ │       │ │ (refactor)  │ │    │
 │  │ └─────────────┘ │       │ └─────────────┘ │       │ └─────────────┘ │    │
 │  └─────────────────┘       └─────────────────┘       └─────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────────┘
-                                        │
-                                        ▼
-                              ┌─────────────────┐
-                              │     GitHub      │
-                              │   (PR via gh)   │
-                              └─────────────────┘
 ```
 
 ## Key Features
 
 ### 🤖 AI-Powered Development
 - Generates complete implementations from ticket descriptions
-- Understands project conventions and patterns
+- Understands project conventions via Claude's context
 - Creates appropriate tests alongside code
 
-### 👀 ScottBott Peer Review
-- Automated code review with pass/fail verdict
-- Identifies critical, major, and minor issues
-- Provides actionable feedback for improvements
-- Enforces quality standards before PR creation
+### 👀 Peer Review with Claude Skill
+- Uses the `peer-review` Claude skill from your repo
+- Automated pass/fail verdict with detailed feedback
+- Falls back to built-in review if skill not found
 
 ### 🔄 Iterative Refinement
 - Automatically refactors based on review feedback
-- Each iteration uses a fresh agent (clean context)
-- Configurable max iterations (default: 3)
+- Fresh agent per iteration (clean context, no token bloat)
+- Structured handoffs between agents (concise context)
 
-### 📺 Observable Agents (tmux Sessions)
-- Each agent runs in its own tmux session
-- Watch agents work in real-time
-- Debug by attaching to any session
+### 📺 Live Streaming (Watch Mode)
+- Watch Claude work in real-time via tmux
+- Each agent runs in its own named session
 - Full visibility into AI decision-making
 
 ### 🌲 Git Worktree Isolation
 - Each ticket works in an isolated worktree
 - No interference with your main working directory
-- Parallel ticket execution possible
-- Clean branch management
+- Commit and push changes at any time
 
 ## Prerequisites
-
-BoatmanMode leverages your existing authenticated CLI tools:
 
 | Tool | Purpose | How to Authenticate |
 |------|---------|---------------------|
@@ -78,24 +64,20 @@ BoatmanMode leverages your existing authenticated CLI tools:
 | `git` | Version control | SSH keys or credential helper |
 | `tmux` | Agent session management | (no auth needed) |
 
-### Claude CLI Setup
-
-If using Vertex AI (Google Cloud):
+### Claude CLI Setup (Vertex AI)
 
 ```bash
 # Authenticate with Google Cloud
 gcloud auth login
 gcloud auth application-default login
 
-# Set environment variables (or use an alias)
+# Set environment (or use an alias)
 export CLAUDE_CODE_USE_VERTEX=1
 export CLOUD_ML_REGION=us-east5
 export ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
 ```
 
 ## Installation
-
-### From Source
 
 ```bash
 git clone https://github.com/handshake/boatmanmode
@@ -106,12 +88,6 @@ go build -o boatman ./cmd/boatman
 sudo mv boatman /usr/local/bin/
 ```
 
-### Go Install
-
-```bash
-go install github.com/handshake/boatmanmode/cmd/boatman@latest
-```
-
 ## Configuration
 
 ### Required: Linear API Key
@@ -120,20 +96,14 @@ go install github.com/handshake/boatmanmode/cmd/boatman@latest
 export LINEAR_API_KEY=lin_api_xxxxx
 ```
 
-Get your API key from: Linear Settings → API → Personal API Keys
-
 ### Optional: Config File
 
-Create `~/.boatman.yaml` or `.boatman.yaml` in your project:
+Create `~/.boatman.yaml`:
 
 ```yaml
-# Linear API key (can also use LINEAR_API_KEY env var)
 linear_key: lin_api_xxxxx
-
-# Workflow settings
-max_iterations: 3      # Max review/refactor cycles
-base_branch: main      # Base branch for new worktrees
-auto_pr: true          # Automatically create PR on success
+max_iterations: 3
+base_branch: main
 ```
 
 ## Usage
@@ -141,165 +111,141 @@ auto_pr: true          # Automatically create PR on success
 ### Execute a Ticket
 
 ```bash
-# Navigate to your project repo
 cd /path/to/your/project
-
-# Run boatman with a Linear ticket ID
 boatman work ENG-123
 ```
 
-### Watch Agents Work
+### Watch Claude Work (Live Streaming)
 
 ```bash
-# In another terminal, watch the active agent
+# In another terminal
 boatman watch
 
-# Or attach to a specific session
+# Or attach to specific session
 tmux attach -t boatman-executor
 tmux attach -t boatman-reviewer-1
-tmux attach -t boatman-refactor-1
 ```
 
 **tmux controls:**
-- `Ctrl+B` then `D` - Detach (return to your terminal)
-- `Ctrl+B` then arrow keys - Switch panes (if multiple)
+- `Ctrl+B` then `D` - Detach
+- `Ctrl+B` then arrow keys - Switch panes
 
 ### Manage Sessions
 
 ```bash
-# List all active boatman sessions
-boatman sessions list
+boatman sessions list      # List active sessions
+boatman sessions kill      # Kill all sessions
+boatman sessions cleanup   # Clean up idle sessions
+```
 
-# Kill all sessions
-boatman sessions kill
+### Manage Worktrees
 
-# Kill a specific session
-boatman sessions kill boatman-executor
+```bash
+boatman worktree list                    # List all worktrees
+boatman worktree commit                  # Commit changes (WIP)
+boatman worktree commit wt-name "msg"    # Commit with message
+boatman worktree push                    # Push branch to origin
+boatman worktree clean                   # Remove all worktrees
+```
 
-# Clean up idle sessions
-boatman sessions cleanup
+### View Changes Manually
+
+```bash
+# Go to worktree
+cd .worktrees/philmiddleton-eng-123-feature
+
+# See changes
+git status
+git diff
+
+# Commit and push
+git add -A
+git commit -m "feat: implement feature"
+git push -u origin HEAD
+
+# Or checkout in main repo
+cd /path/to/project
+git checkout philmiddleton/eng-123-feature
 ```
 
 ### Command Options
 
 ```bash
 boatman work ENG-123 --max-iterations 5    # More refactor attempts
-boatman work ENG-123 --base-branch develop # Use different base branch
+boatman work ENG-123 --base-branch develop # Different base branch
 boatman work ENG-123 --dry-run             # Preview without changes
 ```
 
 ## Workflow Details
 
-### Step 1: Fetch Ticket
-Retrieves ticket details from Linear including title, description, labels, and suggested branch name.
+### Agent Sessions
 
-### Step 2: Create Worktree
-Creates an isolated git worktree at `.worktrees/<branch-name>/` based on the latest main branch.
+Each phase spawns a fresh Claude agent in its own tmux session:
 
-### Step 3: Execute Task
-Spawns a Claude agent (`boatman-executor`) that:
-- Analyzes the ticket requirements
-- Plans the implementation
-- Generates code files with complete contents
+| Session | Purpose |
+|---------|---------|
+| `boatman-executor` | Initial code generation |
+| `boatman-reviewer-1` | First code review |
+| `boatman-refactor-1` | First refactor (if needed) |
+| `boatman-reviewer-2` | Second review (if needed) |
+| ... | Continues until pass or max iterations |
 
-### Step 4: Code Review
-Spawns ScottBott (`boatman-reviewer-N`) that:
-- Reviews the diff against ticket requirements
-- Scores the implementation (0-100)
-- Identifies issues by severity (critical/major/minor)
-- Makes a pass/fail decision
+### Structured Handoffs
 
-**Pass Criteria:**
-- No critical issues
-- No more than 2 major issues
-- Code accomplishes ticket requirements
-- Code follows project conventions
+Agents receive concise, focused context:
 
-### Step 5: Refactor (if needed)
-If review fails, spawns a refactor agent (`boatman-refactor-N`) that:
-- Receives the review feedback
-- Reads the current implementation
-- Applies fixes and improvements
-- Stages changes for re-review
+- **Executor** → Full ticket description
+- **Reviewer** → Requirements summary + diff + files changed
+- **Refactor** → Numbered issue list + guidance + current code
 
-This loops until review passes or max iterations reached.
+This keeps token usage low and agents focused.
 
-### Step 6: Create PR
-On success:
-- Commits changes with conventional commit message
-- Pushes branch to origin
-- Creates PR via `gh pr create`
+### Peer Review Skill
+
+ScottBott tries to invoke the `peer-review` Claude skill:
+
+```bash
+claude -p --agent peer-review "review this diff..."
+```
+
+If the skill exists in your repo's `.claude/` directory, it's used. Otherwise, falls back to a built-in review prompt.
 
 ## Writing Effective Tickets
 
-BoatmanMode works best with detailed tickets. Include:
+Include:
 
-### 1. Clear Requirements
 ```markdown
 ## Requirements
-- Create POST /api/auth/login endpoint
-- Accept email and password in request body
-- Return JWT token on success
-- Return 401 on invalid credentials
-```
+- Clear, specific requirements
+- Acceptance criteria
 
-### 2. Technical Context
-```markdown
 ## Technical Context
-- Use existing User model in internal/models
-- JWT secret is in config.JWTSecret
-- Follow existing handler patterns in internal/api
-```
+- Relevant file paths
+- Existing patterns to follow
+- APIs to use
 
-### 3. Acceptance Criteria
-```markdown
-## Acceptance Criteria
-- [ ] Endpoint validates input
-- [ ] Password is checked against bcrypt hash
-- [ ] JWT includes user ID and expiration
-- [ ] Unit tests cover success and failure cases
-```
-
-### 4. Constraints
-```markdown
 ## Constraints
-- Do not modify existing endpoints
-- Must be backward compatible
-- Performance: < 100ms response time
+- What NOT to change
+- Performance requirements
 ```
 
 ## Project Structure
 
 ```
 boatmanmode/
-├── cmd/
-│   └── boatman/
-│       └── main.go           # CLI entry point
+├── cmd/boatman/main.go       # Entry point
 ├── internal/
-│   ├── agent/
-│   │   └── agent.go          # Workflow orchestration
-│   ├── claude/
-│   │   └── claude.go         # Claude CLI wrapper
-│   ├── cli/
-│   │   ├── root.go           # Cobra root command
-│   │   ├── work.go           # work command
-│   │   └── sessions.go       # sessions/watch commands
-│   ├── config/
-│   │   └── config.go         # Configuration management
-│   ├── executor/
-│   │   └── executor.go       # Code generation agent
-│   ├── github/
-│   │   └── github.go         # PR creation via gh CLI
-│   ├── linear/
-│   │   └── client.go         # Linear API client
-│   ├── scottbott/
-│   │   └── scottbott.go      # Peer review agent
-│   ├── tmux/
-│   │   └── tmux.go           # tmux session management
-│   └── worktree/
-│       └── worktree.go       # Git worktree management
-├── go.mod
-├── go.sum
+│   ├── agent/                # Workflow orchestration
+│   ├── claude/               # Claude CLI wrapper
+│   ├── cli/                  # Cobra commands
+│   ├── config/               # Configuration
+│   ├── executor/             # Code generation
+│   ├── github/               # PR creation (gh CLI)
+│   ├── handoff/              # Agent context passing
+│   ├── linear/               # Linear API client
+│   ├── scottbott/            # Peer review
+│   ├── tmux/                 # Session management
+│   └── worktree/             # Git worktree management
 └── README.md
 ```
 
@@ -307,51 +253,43 @@ boatmanmode/
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `LINEAR_API_KEY` | Linear API key for fetching tickets | Yes |
+| `LINEAR_API_KEY` | Linear API key | Yes |
 | `CLAUDE_CODE_USE_VERTEX` | Set to `1` for Vertex AI | If using Vertex |
-| `CLOUD_ML_REGION` | Vertex AI region (e.g., `us-east5`) | If using Vertex |
-| `ANTHROPIC_VERTEX_PROJECT_ID` | Google Cloud project ID | If using Vertex |
+| `CLOUD_ML_REGION` | Vertex AI region | If using Vertex |
+| `ANTHROPIC_VERTEX_PROJECT_ID` | GCP project ID | If using Vertex |
 | `BOATMAN_DEBUG` | Set to `1` for debug output | No |
 
 ## Troubleshooting
 
 ### "No files were extracted from response"
-Claude didn't produce code in the expected format. Check:
-- Is your ticket detailed enough?
-- Run `boatman watch` to see what Claude is outputting
-- Check if Claude is asking clarifying questions instead of coding
 
-### "argument list too long"
-The prompt exceeded shell limits. This is handled automatically by piping via stdin, but if you see this:
-- Ensure you're on the latest boatman version
-- Check that temp files are being created in `/tmp/boatman-sessions/`
+Claude didn't output code in the expected format. Possible causes:
+- Ticket too vague - add more detail
+- Claude asked questions instead of coding
+- Run `boatman watch` to see what Claude output
 
-### tmux session not found
+### Can't see output when watching
+
+Install `expect` for unbuffered streaming:
 ```bash
-# Check if tmux is running
-tmux list-sessions
-
-# Kill any stuck sessions
-boatman sessions kill
+brew install expect
 ```
 
-### Claude authentication issues
-```bash
-# Test claude CLI directly
-claude -p "Hello, respond with just 'OK'"
+### Session not found
 
-# Re-authenticate if needed
-gcloud auth login
-gcloud auth application-default login
+```bash
+boatman sessions kill  # Kill stuck sessions
+boatman sessions list  # Verify clean state
 ```
 
-## Contributing
+### Want to see changes before PR
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `go test ./...`
-5. Submit a PR
+```bash
+boatman worktree list                    # Find the worktree
+cd .worktrees/<name>                     # Go there
+git diff                                 # See changes
+boatman worktree commit                  # Commit them
+```
 
 ## License
 

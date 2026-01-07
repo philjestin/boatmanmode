@@ -106,38 +106,57 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 		}
 		defer os.Remove(sysFile)
 		
-		// Run claude directly - output goes straight to terminal for live viewing
+		// Run claude with unbuffered output using script or stdbuf
+		// The prompt is passed as a file argument to avoid stdin buffering issues
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
-echo '🤖 Starting Claude...'
+echo '🤖 Claude is working...'
 echo ''
-cat '%s' | claude -p --output-format text --system-prompt "$(cat '%s')"
+
+# Try to use unbuffer for real-time output, fall back to stdbuf, then direct
+if command -v unbuffer &> /dev/null; then
+    unbuffer claude -p --output-format text --system-prompt "$(cat '%s')" "$(cat '%s')"
+elif command -v stdbuf &> /dev/null; then
+    stdbuf -oL claude -p --output-format text --system-prompt "$(cat '%s')" "$(cat '%s')"
+else
+    claude -p --output-format text --system-prompt "$(cat '%s')" "$(cat '%s')"
+fi
+
 EXIT_CODE=$?
 echo ''
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 if [ $EXIT_CODE -eq 0 ]; then
-    echo '✅ Claude completed'
+    echo '✅ Claude completed successfully'
 else
-    echo '❌ Claude failed (exit code: '$EXIT_CODE')'
+    echo '❌ Claude exited with code: '$EXIT_CODE
 fi
 touch '%s'
-`, promptFile, sysFile, sess.DoneFile)
+`, sysFile, promptFile, sysFile, promptFile, sysFile, promptFile, sess.DoneFile)
 	} else {
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
-echo '🤖 Starting Claude...'
+echo '🤖 Claude is working...'
 echo ''
-cat '%s' | claude -p --output-format text
+
+# Try to use unbuffer for real-time output, fall back to stdbuf, then direct
+if command -v unbuffer &> /dev/null; then
+    unbuffer claude -p --output-format text "$(cat '%s')"
+elif command -v stdbuf &> /dev/null; then
+    stdbuf -oL claude -p --output-format text "$(cat '%s')"
+else
+    claude -p --output-format text "$(cat '%s')"
+fi
+
 EXIT_CODE=$?
 echo ''
 echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
 if [ $EXIT_CODE -eq 0 ]; then
-    echo '✅ Claude completed'
+    echo '✅ Claude completed successfully'
 else
-    echo '❌ Claude failed (exit code: '$EXIT_CODE')'
+    echo '❌ Claude exited with code: '$EXIT_CODE
 fi
 touch '%s'
-`, promptFile, sess.DoneFile)
+`, promptFile, promptFile, promptFile, sess.DoneFile)
 	}
 
 	if err := os.WriteFile(scriptFile, []byte(script), 0755); err != nil {

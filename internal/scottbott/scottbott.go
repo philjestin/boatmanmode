@@ -184,24 +184,172 @@ Review these changes against the requirements. Provide your assessment.`, ticket
 
 // parseReviewResponse extracts ReviewResult from Claude's response.
 func parseReviewResponse(response string) (*ReviewResult, error) {
-	// Extract JSON from response (handle markdown code blocks)
+	// First try JSON extraction
 	jsonStr := extractJSON(response)
-
+	
 	var result ReviewResult
-	if err := json.Unmarshal([]byte(jsonStr), &result); err != nil {
-		// If JSON parsing fails, try to interpret as a pass/fail
-		lower := strings.ToLower(response)
-		if strings.Contains(lower, "lgtm") || strings.Contains(lower, "approved") {
-			return &ReviewResult{
-				Passed:  true,
-				Score:   80,
-				Summary: response[:min(200, len(response))],
-			}, nil
-		}
-		return nil, fmt.Errorf("failed to parse review: %w\nResponse: %s", err, response[:min(500, len(response))])
+	if err := json.Unmarshal([]byte(jsonStr), &result); err == nil {
+		return &result, nil
 	}
 
-	return &result, nil
+	// If JSON parsing fails, parse natural language response
+	return parseNaturalLanguageReview(response)
+}
+
+// parseNaturalLanguageReview extracts review info from a natural language response.
+func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
+	lower := strings.ToLower(response)
+	
+	result := &ReviewResult{
+		Score:   70, // Default score
+		Issues:  []Issue{},
+		Praise:  []string{},
+	}
+	
+	// Determine pass/fail
+	// Look for explicit pass indicators
+	if strings.Contains(lower, "lgtm") || 
+	   strings.Contains(lower, "looks good") ||
+	   strings.Contains(lower, "approved") ||
+	   strings.Contains(lower, "ready to merge") ||
+	   strings.Contains(lower, "no critical issues") && !strings.Contains(lower, "major issues") {
+		result.Passed = true
+		result.Score = 85
+	}
+	
+	// Look for explicit fail indicators
+	if strings.Contains(lower, "must be addressed") ||
+	   strings.Contains(lower, "blocking") ||
+	   strings.Contains(lower, "critical issue") ||
+	   strings.Contains(lower, "cannot be merged") ||
+	   strings.Contains(lower, "needs work") ||
+	   strings.Contains(lower, "issues that need to be addressed") {
+		result.Passed = false
+		result.Score = 50
+	}
+	
+	// Extract summary - first paragraph or first 300 chars
+	lines := strings.Split(response, "\n")
+	var summaryBuilder strings.Builder
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			if summaryBuilder.Len() > 0 {
+				break
+			}
+			continue
+		}
+		summaryBuilder.WriteString(line)
+		summaryBuilder.WriteString(" ")
+		if summaryBuilder.Len() > 200 {
+			break
+		}
+	}
+	result.Summary = strings.TrimSpace(summaryBuilder.String())
+	if len(result.Summary) > 300 {
+		result.Summary = result.Summary[:300] + "..."
+	}
+	
+	// Extract issues by looking for common patterns
+	issuePatterns := []string{
+		"issue", "problem", "bug", "error", "fix", "should", "must", "need to",
+		"incorrect", "missing", "wrong", "critical", "major", "minor",
+	}
+	
+	for _, line := range lines {
+		lineLower := strings.ToLower(line)
+		for _, pattern := range issuePatterns {
+			if strings.Contains(lineLower, pattern) {
+				// This line might describe an issue
+				line = strings.TrimSpace(line)
+				line = strings.TrimPrefix(line, "- ")
+				line = strings.TrimPrefix(line, "* ")
+				line = strings.TrimPrefix(line, "• ")
+				
+				if len(line) > 20 && len(line) < 500 && !strings.HasPrefix(line, "#") {
+					severity := "minor"
+					if strings.Contains(lineLower, "critical") {
+						severity = "critical"
+					} else if strings.Contains(lineLower, "major") || strings.Contains(lineLower, "must") {
+						severity = "major"
+					}
+					
+					result.Issues = append(result.Issues, Issue{
+						Severity:    severity,
+						Description: line,
+					})
+				}
+				break
+			}
+		}
+	}
+	
+	// Deduplicate and limit issues
+	seen := make(map[string]bool)
+	var uniqueIssues []Issue
+	for _, issue := range result.Issues {
+		key := strings.ToLower(issue.Description[:min(50, len(issue.Description))])
+		if !seen[key] && len(uniqueIssues) < 10 {
+			seen[key] = true
+			uniqueIssues = append(uniqueIssues, issue)
+		}
+	}
+	result.Issues = uniqueIssues
+	
+	// Count critical/major issues to determine pass/fail
+	criticalCount := 0
+	majorCount := 0
+	for _, issue := range result.Issues {
+		if issue.Severity == "critical" {
+			criticalCount++
+		} else if issue.Severity == "major" {
+			majorCount++
+		}
+	}
+	
+	if criticalCount > 0 || majorCount > 2 {
+		result.Passed = false
+		result.Score = 40 + (10 - criticalCount*10 - majorCount*5)
+		if result.Score < 20 {
+			result.Score = 20
+		}
+	}
+	
+	// Extract guidance - look for "fix" or "recommendation" sections
+	var guidanceBuilder strings.Builder
+	inGuidance := false
+	for _, line := range lines {
+		lineLower := strings.ToLower(line)
+		if strings.Contains(lineLower, "recommend") || 
+		   strings.Contains(lineLower, "suggestion") ||
+		   strings.Contains(lineLower, "to fix") ||
+		   strings.Contains(lineLower, "next step") {
+			inGuidance = true
+		}
+		if inGuidance {
+			guidanceBuilder.WriteString(line)
+			guidanceBuilder.WriteString("\n")
+			if guidanceBuilder.Len() > 500 {
+				break
+			}
+		}
+	}
+	result.Guidance = strings.TrimSpace(guidanceBuilder.String())
+	
+	// If no guidance extracted, use the issues as guidance
+	if result.Guidance == "" && len(result.Issues) > 0 {
+		var issueGuidance strings.Builder
+		issueGuidance.WriteString("Please address the following issues:\n")
+		for i, issue := range result.Issues {
+			if i >= 5 {
+				break
+			}
+			issueGuidance.WriteString(fmt.Sprintf("%d. %s\n", i+1, issue.Description))
+		}
+		result.Guidance = issueGuidance.String()
+	}
+	
+	return result, nil
 }
 
 // extractJSON extracts JSON from a response that might be wrapped in markdown.
