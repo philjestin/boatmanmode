@@ -1,0 +1,15 @@
+# BoatmanMode Configuration
+# Copy this to ~/.boatman.yaml or .boatman.yaml in your project
+
+# Linear API key (or set LINEAR_API_KEY env var)
+# linear_key: lin_api_xxxxx
+
+# Workflow settings
+max_iterations: 3      # Max review/refactor cycles before giving up
+base_branch: main      # Base branch for worktrees
+auto_pr: true          # Automatically create PR on success
+
+# Prerequisites (no config needed - just make sure they're installed & auth'd):
+# - claude CLI (authenticated via gcloud / Vertex AI)
+# - gh CLI (authenticated via `gh auth login`)
+# - git (with push access to your repo)

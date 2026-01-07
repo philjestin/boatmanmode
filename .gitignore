@@ -1,0 +1,43 @@
+.ai/
+
+# Binaries
+boatman
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.test
+*.out
+coverage.html
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build output
+dist/
+bin/
+
+# Worktrees created by boatman
+.worktrees/
+
+# Config with secrets
+.boatman.yaml
+!.boatman.example.yaml
+
+# Environment
+.env
+.env.local
+
