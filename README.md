@@ -193,6 +193,46 @@ boatman work ENG-123 --dry-run             # Preview without changes
 
 ## Workflow Details
 
+### Agent Pipeline
+
+The workflow now uses **separate Claude agents** with structured handoffs:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 3: PLANNER AGENT (tmux: boatman-planner)              │
+│  🧠 Analyzes ticket → Explores codebase → Creates plan      │
+│     Output: Summary, approach, relevant files, patterns     │
+├─────────────────────────────────────────────────────────────┤
+│                    ↓ Concise Handoff ↓                      │
+├─────────────────────────────────────────────────────────────┤
+│  Step 4: EXECUTOR AGENT (tmux: boatman-executor)            │
+│  🤖 Receives plan → Reads key files → Implements solution   │
+│     Output: Modified files in worktree                      │
+├─────────────────────────────────────────────────────────────┤
+│                    ↓ Git Diff ↓                             │
+├─────────────────────────────────────────────────────────────┤
+│  Step 5: REVIEWER AGENT (tmux: boatman-reviewer-N)          │
+│  👀 Reviews diff → Checks patterns → Pass/Fail verdict      │
+│     Output: Score, issues, guidance                         │
+├─────────────────────────────────────────────────────────────┤
+│                    ↓ If Failed ↓                            │
+├─────────────────────────────────────────────────────────────┤
+│  Step 6: REFACTOR AGENT (tmux: boatman-refactor-N)          │
+│  🔧 Receives feedback → Fixes issues → Updates files        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Planner Agent** (separate Claude session):
+- Explores the codebase using Claude's tools
+- Identifies relevant files and patterns
+- Creates a structured plan in JSON format
+- Handoff: Summary, approach, files, patterns, warnings
+
+**Executor Agent** (separate Claude session):
+- Receives plan from planner
+- Follows the approach and reads key files first
+- Implements the solution with full context
+
 ### Agent Sessions
 
 Each phase spawns a fresh Claude agent in its own tmux session:
@@ -226,6 +266,21 @@ claude -p --agent peer-review "review this diff..."
 If the skill exists in your repo's `.claude/` directory, it's used. Otherwise, falls back to a built-in review prompt.
 
 ## How It Works
+
+### Project Rules (Like Cursor)
+
+BoatmanMode automatically loads project rules from multiple sources, just like Cursor does:
+
+| Source | Description |
+|--------|-------------|
+| `CLAUDE.md` | Claude-specific instructions (auto-read by Claude CLI) |
+| `.cursorrules` | Cursor rules file |
+| `.cursor/rules/*.md` | Cursor rule directory |
+| `.ai/rules/*.md` | Additional AI rules |
+
+These rules are prepended to the system prompt, giving Claude the same context and conventions that Cursor would have.
+
+**Example**: If your project has a `.cursorrules` file with coding standards, BoatmanMode will include those when executing tickets.
 
 ### Claude's Agentic Mode
 

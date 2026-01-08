@@ -15,6 +15,7 @@ import (
 	"github.com/handshake/boatmanmode/internal/github"
 	"github.com/handshake/boatmanmode/internal/handoff"
 	"github.com/handshake/boatmanmode/internal/linear"
+	"github.com/handshake/boatmanmode/internal/planner"
 	"github.com/handshake/boatmanmode/internal/scottbott"
 	"github.com/handshake/boatmanmode/internal/worktree"
 )
@@ -45,7 +46,7 @@ func New(cfg *config.Config) (*Agent, error) {
 func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) {
 	totalStart := time.Now()
 	
-	printStep(1, 7, "Fetching ticket from Linear")
+	printStep(1, 8, "Fetching ticket from Linear")
 	fmt.Printf("   🎫 Ticket ID: %s\n", ticketID)
 
 	ticket, err := a.linearClient.GetTicket(ctx, ticketID)
@@ -61,7 +62,7 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	fmt.Println()
 
 	// Step 2: Create worktree
-	printStep(2, 7, "Setting up git worktree")
+	printStep(2, 8, "Setting up git worktree")
 	
 	repoPath, err := os.Getwd()
 	if err != nil {
@@ -87,11 +88,22 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	fmt.Printf("   📁 Worktree: %s\n", wt.Path)
 	fmt.Println()
 
-	// Step 3: Execute the task
-	printStep(3, 7, "Executing development task")
+	// Step 3: Planning - Claude agent analyzes ticket and codebase
+	printStep(3, 8, "Planning (analyzing ticket & codebase)")
+	
+	planAgent := planner.New(wt.Path)
+	plan, err := planAgent.Analyze(ctx, ticket)
+	if err != nil {
+		fmt.Printf("   ⚠️  Planning failed: %v (continuing without plan)\n", err)
+		plan = nil
+	}
+	fmt.Println()
+
+	// Step 4: Execute the task with plan handoff
+	printStep(4, 8, "Executing development task")
 	
 	exec := executor.New(wt.Path)
-	result, err := exec.Execute(ctx, ticket)
+	result, err := exec.ExecuteWithPlan(ctx, ticket, plan)
 	if err != nil {
 		return nil, fmt.Errorf("execution failed: %w", err)
 	}
@@ -107,8 +119,8 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 		return nil, fmt.Errorf("failed to stage changes: %w", err)
 	}
 
-	// Step 4-5: Review loop
-	printStep(4, 7, "Code review with ScottBott")
+	// Step 5-6: Review loop
+	printStep(5, 8, "Code review with ScottBott")
 	
 	var iterations int
 	var reviewResult *scottbott.ReviewResult
@@ -151,7 +163,7 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 		}
 
 		// Refactor based on feedback - use a fresh agent for each iteration
-		printStep(5, 7, fmt.Sprintf("Refactoring (attempt %d)", iterations))
+		printStep(6, 8, fmt.Sprintf("Refactoring (attempt %d)", iterations))
 		
 		// Create concise refactor handoff
 		refactorExec := executor.NewRefactorExecutor(wt.Path, iterations)
@@ -194,7 +206,7 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	}
 
 	// Step 6: Commit
-	printStep(6, 7, "Committing and pushing")
+	printStep(7, 8, "Committing and pushing")
 	
 	commitMsg := fmt.Sprintf("feat(%s): %s\n\n%s",
 		ticket.Identifier,
@@ -215,7 +227,7 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	fmt.Println()
 
 	// Step 7: Create PR
-	printStep(7, 7, "Creating pull request")
+	printStep(8, 8, "Creating pull request")
 
 	prBody := fmt.Sprintf(`## %s
 

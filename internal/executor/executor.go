@@ -14,6 +14,7 @@ import (
 	"github.com/handshake/boatmanmode/internal/claude"
 	"github.com/handshake/boatmanmode/internal/handoff"
 	"github.com/handshake/boatmanmode/internal/linear"
+	"github.com/handshake/boatmanmode/internal/planner"
 )
 
 // Executor performs AI-powered development tasks.
@@ -49,16 +50,39 @@ func NewRefactorExecutor(worktreePath string, iteration int) *Executor {
 
 // Execute performs the development task described in the ticket.
 func (e *Executor) Execute(ctx context.Context, ticket *linear.Ticket) (*ExecutionResult, error) {
-	fmt.Println("   📖 Building execution prompt from ticket...")
+	// Use planning agent to analyze the ticket first
+	return e.ExecuteWithPlan(ctx, ticket, nil)
+}
+
+// ExecuteWithPlan performs execution with an optional pre-computed plan.
+func (e *Executor) ExecuteWithPlan(ctx context.Context, ticket *linear.Ticket, plan *planner.Plan) (*ExecutionResult, error) {
+	// Build prompt with ticket
+	fmt.Println("   📖 Building execution prompt...")
 	prompt := e.buildPrompt(ticket)
 
-	// Simple prompt - let Claude use its agentic tools to write files directly
+	// Add planning handoff if available
+	if plan != nil {
+		prompt += "\n\n---\n\n" + plan.ToHandoff()
+		fmt.Printf("   📋 Added plan handoff (%d files, %d steps)\n", len(plan.RelevantFiles), len(plan.Approach))
+	}
+
+	// Load project rules (like Cursor does)
+	projectRules := e.loadProjectRules()
+
+	// Build system prompt with project rules
 	systemPrompt := `You are an expert software developer. Execute the development task described.
 Use your file editing tools to create and modify files as needed.
 Do not ask for permission - just implement the solution.
+
+You have been given a plan from a planning agent. Follow the approach and read the key files first.
 If implementation already exists, add tests or make improvements as needed.`
 
-	fmt.Println("   🤖 Sending task to Claude (streaming)...")
+	if projectRules != "" {
+		systemPrompt = projectRules + "\n\n---\n\n" + systemPrompt
+	}
+
+	// Phase 3: Execute with Claude
+	fmt.Println("   🤖 Phase 3: Executing with Claude...")
 	fmt.Printf("   📝 Prompt size: %d chars\n", len(prompt))
 	
 	start := time.Now()
@@ -441,4 +465,79 @@ func extractSummary(response string) string {
 	}
 
 	return strings.TrimSpace(summary.String())
+}
+
+// loadProjectRules loads project rules from various sources (like Cursor does).
+// Checks: .cursorrules, .cursor/rules/**/*.md, CLAUDE.md
+func (e *Executor) loadProjectRules() string {
+	var rules strings.Builder
+	rulesCount := 0
+
+	// 1. Check for CLAUDE.md (Claude CLI reads this automatically, but include for completeness)
+	claudeMD := filepath.Join(e.worktreePath, "CLAUDE.md")
+	if content, err := os.ReadFile(claudeMD); err == nil {
+		rules.WriteString("# Project Instructions (from CLAUDE.md)\n\n")
+		rules.WriteString(string(content))
+		rules.WriteString("\n\n")
+		rulesCount++
+	}
+
+	// 2. Check for .cursorrules (single file)
+	cursorrules := filepath.Join(e.worktreePath, ".cursorrules")
+	if content, err := os.ReadFile(cursorrules); err == nil {
+		rules.WriteString("# Cursor Rules (from .cursorrules)\n\n")
+		rules.WriteString(string(content))
+		rules.WriteString("\n\n")
+		rulesCount++
+	}
+
+	// 3. Check for .cursor/rules/ (recursively load all .md/.mdc files)
+	cursorRulesDir := filepath.Join(e.worktreePath, ".cursor", "rules")
+	rulesCount += e.loadRulesFromDir(cursorRulesDir, "Cursor", &rules)
+
+	// 4. Check for .ai/rules/
+	aiRulesDir := filepath.Join(e.worktreePath, ".ai", "rules")
+	rulesCount += e.loadRulesFromDir(aiRulesDir, "AI", &rules)
+
+	if rulesCount > 0 {
+		fmt.Printf("   📋 Loaded %d project rule file(s)\n", rulesCount)
+	}
+
+	return strings.TrimSpace(rules.String())
+}
+
+// loadRulesFromDir recursively loads rule files from a directory.
+func (e *Executor) loadRulesFromDir(dir, prefix string, rules *strings.Builder) int {
+	count := 0
+	
+	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip errors
+		}
+		if info.IsDir() {
+			return nil
+		}
+		
+		// Only load .md and .mdc files
+		ext := filepath.Ext(info.Name())
+		if ext != ".md" && ext != ".mdc" {
+			return nil
+		}
+		
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		
+		// Get relative path from rules dir for context
+		relPath, _ := filepath.Rel(dir, path)
+		rules.WriteString(fmt.Sprintf("# %s Rule: %s\n\n", prefix, relPath))
+		rules.WriteString(string(content))
+		rules.WriteString("\n\n")
+		count++
+		
+		return nil
+	})
+	
+	return count
 }
