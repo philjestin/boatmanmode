@@ -11,20 +11,27 @@ An AI-powered development agent that automates ticket execution with peer review
 │  ┌─────────────┐    ┌─────────────────────────────────────────────────────┐ │
 │  │   Linear    │───▶│                   Workflow Engine                    │ │
 │  │  (tickets)  │    │                                                       │ │
-│  └─────────────┘    │  1. Fetch ticket         4. Review (peer-review)     │ │
-│                     │  2. Create worktree      5. Refactor loop            │ │
-│                     │  3. Execute (Claude)     6. Create PR (gh)           │ │
-│                     └─────────────────────────────────────────────────────┘ │
-│                                        │                                      │
-│            ┌───────────────────────────┼───────────────────────────┐         │
-│            ▼                           ▼                           ▼         │
-│  ┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐    │
-│  │ tmux: executor  │       │ tmux: reviewer-1│       │ tmux: refactor-1│    │
-│  │ ┌─────────────┐ │       │ ┌─────────────┐ │       │ ┌─────────────┐ │    │
-│  │ │   Claude    │ │       │ │ peer-review │ │       │ │   Claude    │ │    │
-│  │ │  (coding)   │ │       │ │   skill     │ │       │ │ (refactor)  │ │    │
-│  │ └─────────────┘ │       │ └─────────────┘ │       │ └─────────────┘ │    │
-│  └─────────────────┘       └─────────────────┘       └─────────────────┘    │
+│  └─────────────┘    │  1. Fetch ticket         5. Review (peer-review)     │ │
+│                     │  2. Create worktree      6. Refactor loop            │ │
+│  ┌─────────────┐    │  3. Plan (parallel)      7. Verify diff              │ │
+│  │ Coordinator │◀──▶│  4. Validate & Execute   8. Create PR (gh)           │ │
+│  │  (agents)   │    └─────────────────────────────────────────────────────┘ │
+│  └─────────────┘                      │                                      │
+│            ┌──────────────────────────┼──────────────────────────┐          │
+│            ▼                          ▼                          ▼          │
+│  ┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐   │
+│  │  Preflight +    │       │ Test Runner +   │       │  Diff Verify +  │   │
+│  │  Planner Agent  │       │ Review Agent    │       │  Refactor Agent │   │
+│  │ ┌─────────────┐ │       │ ┌─────────────┐ │       │ ┌─────────────┐ │   │
+│  │ │   Claude    │ │       │ │ peer-review │ │       │ │   Claude    │ │   │
+│  │ │  (planning) │ │       │ │   + tests   │ │       │ │ (refactor)  │ │   │
+│  │ └─────────────┘ │       │ └─────────────┘ │       │ └─────────────┘ │   │
+│  └─────────────────┘       └─────────────────┘       └─────────────────┘   │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                        Support Systems                                 │  │
+│  │  📌 Context Pin  │  💾 Checkpoint  │  🧠 Memory  │  📝 Issue Tracker  │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -54,6 +61,82 @@ An AI-powered development agent that automates ticket execution with peer review
 - Each ticket works in an isolated worktree
 - No interference with your main working directory
 - Commit and push changes at any time
+
+---
+
+## 🆕 New Features
+
+### 🚀 Pre-flight Validation Agent
+Validates the execution plan before any code changes:
+- Verifies all referenced files exist
+- Checks for deprecated patterns
+- Validates approach clarity
+- Warns about potential issues early
+
+### 🧪 Test Runner Agent
+Automatically runs tests after code changes:
+- Auto-detects test framework (Go, Jest, RSpec, pytest)
+- Parses test output for pass/fail
+- Extracts coverage metrics
+- Reports failed test names
+
+### 🔍 Diff Verification Agent
+Ensures refactors actually address review issues:
+- Analyzes old vs new diffs
+- Matches changes to specific issues
+- Calculates confidence scores
+- Detects newly introduced problems
+
+### 🤝 Parallel Agent Coordination
+Multiple agents can work simultaneously without conflicts:
+- Central coordinator manages agent communication
+- Work claiming prevents duplicate effort
+- File locking prevents race conditions
+- Shared context for agent collaboration
+
+### 📌 Context Pinning
+Ensures consistency during multi-file changes:
+- Pins file contents with checksums
+- Tracks file dependencies
+- Detects stale files during long operations
+- Refreshes context when needed
+
+### 📦 Dynamic Handoff Compression
+Adapts context size to token budgets:
+- 4 compression levels (light → extreme)
+- Priority-based content preservation
+- Smart extraction of signatures and bullet points
+- Automatic truncation with markers
+
+### 📄 Smart File Summarization
+Handles large files intelligently:
+- Extracts function/class signatures
+- Preserves imports and exports
+- Keeps key comments and TODOs
+- Language-aware parsing (Go, Python, Ruby, JS/TS, Java, Rust)
+
+### 📝 Issue Deduplication
+Tracks issues across review iterations:
+- Prevents re-reporting same issues
+- Detects similar issues via text similarity
+- Tracks persistent vs addressed issues
+- Provides iteration statistics
+
+### 💾 Checkpoint/Resume
+Saves progress at each workflow step:
+- Automatic state persistence
+- Resume from last successful step
+- Survives crashes and interruptions
+- Progress tracking and reporting
+
+### 🧠 Agent Memory
+Cross-session learning for improved performance:
+- Learns successful patterns
+- Remembers common issues and solutions
+- Caches effective prompts
+- Per-project memory storage
+
+---
 
 ## Prerequisites
 
@@ -104,6 +187,14 @@ Create `~/.boatman.yaml`:
 linear_key: lin_api_xxxxx
 max_iterations: 3
 base_branch: main
+
+# New options
+enable_preflight: true
+enable_tests: true
+enable_diff_verify: true
+enable_memory: true
+checkpoint_dir: ~/.boatman/checkpoints
+memory_dir: ~/.boatman/memory
 ```
 
 ## Usage
@@ -193,140 +284,103 @@ boatman work ENG-123 --dry-run             # Preview without changes
 
 ## Workflow Details
 
-### Agent Pipeline
+### Enhanced Agent Pipeline
 
-The workflow now uses **separate Claude agents** with structured handoffs:
+The workflow now uses **coordinated parallel agents** with intelligent handoffs:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Step 3: PLANNER AGENT (tmux: boatman-planner)              │
+│  Step 1: PLANNER AGENT (tmux: boatman-planner)              │
 │  🧠 Analyzes ticket → Explores codebase → Creates plan      │
 │     Output: Summary, approach, relevant files, patterns     │
 ├─────────────────────────────────────────────────────────────┤
-│                    ↓ Concise Handoff ↓                      │
+│  Step 2: PREFLIGHT VALIDATION                               │
+│  ✅ Validates plan → Checks files exist → Warns of issues   │
+│     Output: Validation result, warnings, suggestions        │
 ├─────────────────────────────────────────────────────────────┤
-│  Step 4: EXECUTOR AGENT (tmux: boatman-executor)            │
+│              ↓ Compressed Handoff (token-aware) ↓           │
+├─────────────────────────────────────────────────────────────┤
+│  Step 3: EXECUTOR AGENT (tmux: boatman-executor)            │
 │  🤖 Receives plan → Reads key files → Implements solution   │
 │     Output: Modified files in worktree                      │
 ├─────────────────────────────────────────────────────────────┤
-│                    ↓ Git Diff ↓                             │
+│  Step 4: TEST RUNNER                                        │
+│  🧪 Detects framework → Runs tests → Reports results        │
+│     Output: Pass/fail, coverage, failed test names          │
+├─────────────────────────────────────────────────────────────┤
+│              ↓ Git Diff + Test Results ↓                    │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 5: REVIEWER AGENT (tmux: boatman-reviewer-N)          │
 │  👀 Reviews diff → Checks patterns → Pass/Fail verdict      │
-│     Output: Score, issues, guidance                         │
+│     Output: Score, issues (deduplicated), guidance          │
 ├─────────────────────────────────────────────────────────────┤
-│                    ↓ If Failed ↓                            │
+│              ↓ If Failed (with issue deduplication) ↓       │
 ├─────────────────────────────────────────────────────────────┤
 │  Step 6: REFACTOR AGENT (tmux: boatman-refactor-N)          │
 │  🔧 Receives feedback → Fixes issues → Updates files        │
+├─────────────────────────────────────────────────────────────┤
+│  Step 7: DIFF VERIFICATION                                  │
+│  🔍 Compares diffs → Verifies issues addressed              │
+│     Output: Confidence score, addressed/unaddressed issues  │
 └─────────────────────────────────────────────────────────────┘
+         💾 Checkpoint saved at each step
+         🧠 Patterns learned on success
 ```
 
-**Planner Agent** (separate Claude session):
-- Explores the codebase using Claude's tools
-- Identifies relevant files and patterns
-- Creates a structured plan in JSON format
-- Handoff: Summary, approach, files, patterns, warnings
+### Agent Coordination
 
-**Executor Agent** (separate Claude session):
-- Receives plan from planner
-- Follows the approach and reads key files first
-- Implements the solution with full context
+The coordinator manages parallel agent execution:
 
-### Agent Sessions
+```go
+// Agents can claim work to prevent conflicts
+coord.ClaimWork("executor", &WorkClaim{
+    WorkID: "implement-feature",
+    Files:  []string{"pkg/feature.go"},
+})
 
-Each agent runs in its own tmux session for isolation and observability:
+// File locking prevents race conditions
+coord.LockFiles("executor", []string{"pkg/feature.go"})
 
-| Session | Purpose | Handoff |
-|---------|---------|---------|
-| `boatman-planner` | Analyze ticket, explore codebase | → JSON plan |
-| `boatman-executor` | Implement solution | → Git changes |
-| `boatman-reviewer-1` | First code review | → Pass/Fail + issues |
-| `boatman-refactor-1` | First refactor | → Updated files |
-| `boatman-reviewer-2` | Second review | → Pass/Fail |
-| ... | Continues until pass or max iterations |
+// Shared context for collaboration
+coord.SetContext("plan", planJSON)
+result, _ := coord.GetContext("plan")
+```
 
 ### Structured Handoffs
 
-Agents receive concise, focused context:
+Agents receive concise, focused context with dynamic compression:
 
-- **Executor** → Full ticket description
-- **Reviewer** → Requirements summary + diff + files changed
-- **Refactor** → Numbered issue list + guidance + current code
+| Handoff Type | Content | Token Budget |
+|--------------|---------|--------------|
+| Plan → Executor | Summary, approach, files | ~4000 tokens |
+| Executor → Reviewer | Requirements, diff, test results | ~3000 tokens |
+| Reviewer → Refactor | Issues (deduplicated), guidance | ~2000 tokens |
 
-This keeps token usage low and agents focused.
+### Checkpoint System
 
-### Peer Review Skill
-
-ScottBott tries to invoke the `peer-review` Claude skill:
+Progress is saved at each step:
 
 ```bash
-claude -p --agent peer-review "review this diff..."
+# Checkpoints are saved in ~/.boatman/checkpoints/
+# Format: {ticket-id}_{timestamp}.json
+
+# Resume an interrupted workflow
+boatman work ENG-123 --resume
 ```
 
-If the skill exists in your repo's `.claude/` directory, it's used. Otherwise, falls back to a built-in review prompt.
+### Agent Memory
 
-## How It Works
+Cross-session learning improves over time:
 
-### Project Rules (Like Cursor)
+```bash
+# Memory is stored in ~/.boatman/memory/
+# Per-project memory for patterns and issues
 
-BoatmanMode automatically loads project rules from multiple sources, just like Cursor does:
-
-| Source | Description |
-|--------|-------------|
-| `CLAUDE.md` | Claude-specific instructions (auto-read by Claude CLI) |
-| `.cursorrules` | Cursor rules file |
-| `.cursor/rules/*.md` | Cursor rule directory |
-| `.ai/rules/*.md` | Additional AI rules |
-
-These rules are prepended to the system prompt, giving Claude the same context and conventions that Cursor would have.
-
-**Example**: If your project has a `.cursorrules` file with coding standards, BoatmanMode will include those when executing tickets.
-
-### Claude's Agentic Mode
-
-BoatmanMode leverages Claude's **agentic mode** - Claude directly reads and writes files in the worktree using its built-in tools (Read, Edit, Write, Bash, Glob, Grep). After Claude completes, BoatmanMode detects what changed via `git status`.
-
-**Security**: BoatmanMode runs Claude with `--dangerously-skip-permissions` to allow file writes without prompting. This is safe because:
-- Claude only has access to the isolated worktree
-- All changes are tracked via git
-- You can review before committing/pushing
-
-### Live Activity Streaming
-
-BoatmanMode uses `--output-format stream-json` to capture Claude's tool usage in real-time. The stream is parsed to show human-readable activity:
-
-| Icon | Meaning |
-|------|---------|
-| 🔧 | Running a bash command |
-| 📖 | Reading a file |
-| ✏️ | Editing a file |
-| 📝 | Writing a new file |
-| 🔍 | Searching files (glob/grep) |
-| 💭 | Claude's thinking |
-| 📊 | Task completed |
-
-### File Change Detection
-
-After Claude completes, BoatmanMode runs `git status --porcelain` to detect all modified, added, and deleted files. This is more reliable than parsing output since Claude writes files directly.
-
-## Writing Effective Tickets
-
-Include:
-
-```markdown
-## Requirements
-- Clear, specific requirements
-- Acceptance criteria
-
-## Technical Context
-- Relevant file paths
-- Existing patterns to follow
-- APIs to use
-
-## Constraints
-- What NOT to change
-- Performance requirements
+# Memory includes:
+# - Successful code patterns
+# - Common review issues
+# - Effective prompts
+# - Project preferences
 ```
 
 ## Project Structure
@@ -336,14 +390,24 @@ boatmanmode/
 ├── cmd/boatman/main.go       # Entry point
 ├── internal/
 │   ├── agent/                # Workflow orchestration
+│   ├── checkpoint/           # Progress saving/resume
 │   ├── claude/               # Claude CLI wrapper
 │   ├── cli/                  # Cobra commands
 │   ├── config/               # Configuration
+│   ├── contextpin/           # File dependency tracking
+│   ├── coordinator/          # Parallel agent coordination
+│   ├── diffverify/           # Diff verification agent
 │   ├── executor/             # Code generation
+│   ├── filesummary/          # Smart file summarization
 │   ├── github/               # PR creation (gh CLI)
-│   ├── handoff/              # Agent context passing
+│   ├── handoff/              # Agent context passing + compression
+│   ├── issuetracker/         # Issue deduplication
 │   ├── linear/               # Linear API client
+│   ├── memory/               # Cross-session learning
+│   ├── planner/              # Plan generation
+│   ├── preflight/            # Pre-execution validation
 │   ├── scottbott/            # Peer review
+│   ├── testrunner/           # Test execution
 │   ├── tmux/                 # Session management
 │   └── worktree/             # Git worktree management
 └── README.md
@@ -358,6 +422,8 @@ boatmanmode/
 | `CLOUD_ML_REGION` | Vertex AI region | If using Vertex |
 | `ANTHROPIC_VERTEX_PROJECT_ID` | GCP project ID | If using Vertex |
 | `BOATMAN_DEBUG` | Set to `1` for debug output | No |
+| `BOATMAN_CHECKPOINT_DIR` | Custom checkpoint directory | No |
+| `BOATMAN_MEMORY_DIR` | Custom memory directory | No |
 
 ## Troubleshooting
 
@@ -397,9 +463,32 @@ git diff                                 # See changes
 boatman worktree commit                  # Commit them
 ```
 
+### Resume interrupted workflow
+
+```bash
+boatman work ENG-123 --resume  # Resume from checkpoint
+```
+
 ### Timeout waiting for Claude
 
 Large codebases take longer. The default timeout is 30 minutes. If Claude is actively working (visible in `boatman watch`), just wait. If stuck, use `boatman sessions kill --force`.
+
+## Running Tests
+
+```bash
+# Run all tests
+go test ./...
+
+# Run with verbose output
+go test -v ./...
+
+# Run specific package tests
+go test -v ./internal/coordinator
+go test -v ./internal/checkpoint
+
+# Run with coverage
+go test -cover ./...
+```
 
 ## License
 
