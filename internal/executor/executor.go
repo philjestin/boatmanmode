@@ -144,20 +144,32 @@ func (e *Executor) detectChangedFiles() ([]string, error) {
 
 	var files []string
 	for _, line := range strings.Split(string(output), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		// Don't TrimSpace - it removes the leading space from status like " M file"
+		if len(line) < 4 {
 			continue
 		}
-		// Format is "XY filename" where XY is the status
-		// Skip the first 3 characters (status + space)
-		if len(line) > 3 {
-			file := line[3:]
-			// Handle renamed files: "R  old -> new"
-			if idx := strings.Index(file, " -> "); idx != -1 {
-				file = file[idx+4:]
-			}
-			files = append(files, file)
+		
+		// Format is "XY filename" where XY is 2 status chars + 1 space
+		// Examples: " M packs/file.rb", "A  packs/file.rb", "?? packs/file.rb"
+		file := line[3:]
+		
+		// Handle renamed files: "R  old -> new"
+		if idx := strings.Index(file, " -> "); idx != -1 {
+			file = file[idx+4:]
 		}
+		
+		// Skip directories (end with /)
+		if strings.HasSuffix(file, "/") {
+			continue
+		}
+		
+		// Verify it's a file, not a directory
+		fullPath := filepath.Join(e.worktreePath, file)
+		if info, err := os.Stat(fullPath); err == nil && info.IsDir() {
+			continue
+		}
+		
+		files = append(files, file)
 	}
 
 	return files, nil

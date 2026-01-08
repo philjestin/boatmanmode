@@ -84,6 +84,67 @@ func (m *Manager) CreateSession(name, workDir string) (*Session, error) {
 	}, nil
 }
 
+// parseScript is the shell code that parses Claude's stream-json output.
+// It's shared between the with-system-prompt and without-system-prompt versions.
+// RESULT_FILE env var should be set before calling to save the result content.
+const parseScript = `
+# Parse JSON to show activity and token usage
+parse_claude_output() {
+    while IFS= read -r line; do
+        if echo "$line" | grep -q '"type":"assistant"'; then
+            if echo "$line" | grep -q '"name":"Bash"'; then
+                cmd=$(echo "$line" | sed -n 's/.*"command":"\([^"]*\)".*/\1/p' | head -1)
+                if [ -n "$cmd" ]; then
+                    echo "🔧 Running: $cmd"
+                fi
+            elif echo "$line" | grep -q '"name":"Edit"'; then
+                file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+                if [ -n "$file" ]; then
+                    echo "✏️  Editing: $file"
+                fi
+            elif echo "$line" | grep -q '"name":"Write"'; then
+                file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+                if [ -n "$file" ]; then
+                    echo "📝 Writing: $file"
+                fi
+            elif echo "$line" | grep -q '"name":"Read"'; then
+                file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+                if [ -n "$file" ]; then
+                    echo "📖 Reading: $file"
+                fi
+            elif echo "$line" | grep -q '"name":"Glob"'; then
+                echo "🔍 Searching files..."
+            elif echo "$line" | grep -q '"name":"Grep"'; then
+                echo "🔍 Searching content..."
+            elif echo "$line" | grep -q '"type":"text"' && ! echo "$line" | grep -q '"tool_use"'; then
+                text=$(echo "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | head -1 | head -c 200)
+                if [ -n "$text" ]; then
+                    echo "💭 $text"
+                fi
+            fi
+        elif echo "$line" | grep -q '"type":"result"'; then
+            echo ""
+            echo "📊 Task completed!"
+            # Save the result line for later parsing (contains full response)
+            if [ -n "$RESULT_FILE" ]; then
+                echo "$line" > "$RESULT_FILE"
+            fi
+            # Extract and display token usage
+            cost=$(echo "$line" | sed -n 's/.*"total_cost_usd":\([0-9.]*\).*/\1/p')
+            input=$(echo "$line" | grep -o '"input_tokens":[0-9]*' | head -1 | sed 's/"input_tokens"://')
+            output=$(echo "$line" | grep -o '"output_tokens":[0-9]*' | head -1 | sed 's/"output_tokens"://')
+            cache=$(echo "$line" | grep -o '"cache_read_input_tokens":[0-9]*' | head -1 | sed 's/"cache_read_input_tokens"://')
+            if [ -n "$cost" ]; then
+                printf "💰 Cost: \$%.4f\n" "$cost"
+            fi
+            if [ -n "$input" ] || [ -n "$output" ]; then
+                echo "📈 Tokens: ${input:-0} in / ${output:-0} out / ${cache:-0} cached"
+            fi
+        fi
+    done
+}
+`
+
 // RunClaudeStreaming runs Claude with live output in the tmux session.
 // The output streams directly to the terminal for live viewing.
 // When complete, the output is captured via tmux capture-pane.
@@ -94,8 +155,12 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 		return "", fmt.Errorf("failed to write prompt file: %w", err)
 	}
 	// Don't delete prompt file until after completion - tmux needs it
+	
+	// Result file stores Claude's JSON result for later parsing
+	resultFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-result.json", sess.Name))
+	os.Remove(resultFile) // Clear any old result
 
-	// Create runner script that pipes prompt via stdin
+	// Create runner script
 	scriptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-run.sh", sess.Name))
 	
 	var script string
@@ -104,59 +169,24 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 		if err := os.WriteFile(sysFile, []byte(systemPrompt), 0644); err != nil {
 			return "", fmt.Errorf("failed to write system prompt file: %w", err)
 		}
-		// Don't delete until after completion
 		
-		// Use stream-json to show Claude's activity in real-time
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
 echo '🤖 Claude is working (with file write permissions)...'
 echo '📝 Activity will stream below:'
 echo ''
+
+# Set result file path for parse_claude_output to save result
+export RESULT_FILE='%s'
+
+%s
 
 # Read into variables
 SYSTEM_PROMPT="$(cat '%s')"
 USER_PROMPT="$(cat '%s')"
 
-# Run Claude with stream-json and parse output to show activity
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | while IFS= read -r line; do
-    # Parse JSON to show activity
-    if echo "$line" | grep -q '"type":"assistant"'; then
-        if echo "$line" | grep -q '"name":"Bash"'; then
-            cmd=$(echo "$line" | sed -n 's/.*"command":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$cmd" ]; then
-                echo "🔧 Running: $cmd"
-            fi
-        elif echo "$line" | grep -q '"name":"Edit"'; then
-            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$file" ]; then
-                echo "✏️  Editing: $file"
-            fi
-        elif echo "$line" | grep -q '"name":"Write"'; then
-            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$file" ]; then
-                echo "📝 Writing: $file"
-            fi
-        elif echo "$line" | grep -q '"name":"Read"'; then
-            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$file" ]; then
-                echo "📖 Reading: $file"
-            fi
-        elif echo "$line" | grep -q '"name":"Glob"'; then
-            echo "🔍 Searching files..."
-        elif echo "$line" | grep -q '"name":"Grep"'; then
-            echo "🔍 Searching content..."
-        elif echo "$line" | grep -q '"type":"text"' && ! echo "$line" | grep -q '"tool_use"'; then
-            # Extract and show text content (Claude's thinking)
-            text=$(echo "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | head -1 | head -c 200)
-            if [ -n "$text" ]; then
-                echo "💭 $text"
-            fi
-        fi
-    elif echo "$line" | grep -q '"type":"result"'; then
-        echo ""
-        echo "📊 Task completed!"
-    fi
-done
+# Run Claude with stream-json and parse output
+claude -p --dangerously-skip-permissions --verbose --output-format stream-json --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -168,59 +198,26 @@ else
 fi
 touch '%s'
 
-# Cleanup
+# Cleanup (leave result file for parsing)
 rm -f '%s' '%s' '%s'
-`, sysFile, promptFile, sess.DoneFile, promptFile, sysFile, scriptFile)
+`, resultFile, parseScript, sysFile, promptFile, sess.DoneFile, promptFile, sysFile, scriptFile)
 	} else {
-		// Use stream-json to show Claude's activity in real-time
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
 echo '🤖 Claude is working (with file write permissions)...'
 echo '📝 Activity will stream below:'
 echo ''
 
+# Set result file path for parse_claude_output to save result
+export RESULT_FILE='%s'
+
+%s
+
 # Read into variable
 USER_PROMPT="$(cat '%s')"
 
-# Run Claude with stream-json and parse output to show activity
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json "$USER_PROMPT" 2>&1 | while IFS= read -r line; do
-    # Parse JSON to show activity
-    if echo "$line" | grep -q '"type":"assistant"'; then
-        if echo "$line" | grep -q '"name":"Bash"'; then
-            cmd=$(echo "$line" | sed -n 's/.*"command":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$cmd" ]; then
-                echo "🔧 Running: $cmd"
-            fi
-        elif echo "$line" | grep -q '"name":"Edit"'; then
-            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$file" ]; then
-                echo "✏️  Editing: $file"
-            fi
-        elif echo "$line" | grep -q '"name":"Write"'; then
-            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$file" ]; then
-                echo "📝 Writing: $file"
-            fi
-        elif echo "$line" | grep -q '"name":"Read"'; then
-            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
-            if [ -n "$file" ]; then
-                echo "📖 Reading: $file"
-            fi
-        elif echo "$line" | grep -q '"name":"Glob"'; then
-            echo "🔍 Searching files..."
-        elif echo "$line" | grep -q '"name":"Grep"'; then
-            echo "🔍 Searching content..."
-        elif echo "$line" | grep -q '"type":"text"' && ! echo "$line" | grep -q '"tool_use"'; then
-            text=$(echo "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | head -1 | head -c 200)
-            if [ -n "$text" ]; then
-                echo "💭 $text"
-            fi
-        fi
-    elif echo "$line" | grep -q '"type":"result"'; then
-        echo ""
-        echo "📊 Task completed!"
-    fi
-done
+# Run Claude with stream-json and parse output
+claude -p --dangerously-skip-permissions --verbose --output-format stream-json "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -232,9 +229,9 @@ else
 fi
 touch '%s'
 
-# Cleanup
+# Cleanup (leave result file for parsing)
 rm -f '%s' '%s'
-`, promptFile, sess.DoneFile, promptFile, scriptFile)
+`, resultFile, parseScript, promptFile, sess.DoneFile, promptFile, scriptFile)
 	}
 
 	if err := os.WriteFile(scriptFile, []byte(script), 0755); err != nil {
@@ -267,6 +264,9 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 	timeout := time.After(30 * time.Minute)
 	startTime := time.Now()
 	lastDot := time.Now()
+	
+	// Result file where the stream-json result is saved
+	resultFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-result.json", sess.Name))
 
 	for {
 		select {
@@ -289,6 +289,12 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 				// Save for debugging
 				os.WriteFile(sess.OutputFile, []byte(output), 0644)
 				
+				// Try to extract actual result from the result file (has full response)
+				if resultContent, err := os.ReadFile(resultFile); err == nil && len(resultContent) > 0 {
+					defer os.Remove(resultFile) // Clean up after reading
+					return extractResultFromJSON(string(resultContent)), nil
+				}
+				
 				return extractClaudeOutput(output), nil
 			}
 			
@@ -299,6 +305,55 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 			}
 		}
 	}
+}
+
+// extractResultFromJSON extracts Claude's text result from the stream-json result line.
+func extractResultFromJSON(jsonLine string) string {
+	// The result line contains: {"type":"result","result":"actual content here",...}
+	// Extract the "result" field
+	
+	// Find "result":" and extract the value
+	resultKey := `"result":"`
+	startIdx := strings.Index(jsonLine, resultKey)
+	if startIdx == -1 {
+		return jsonLine // Return as-is if no result field found
+	}
+	
+	startIdx += len(resultKey)
+	
+	// Find the end of the string value (handle escaped quotes)
+	var sb strings.Builder
+	escaped := false
+	for i := startIdx; i < len(jsonLine); i++ {
+		c := jsonLine[i]
+		if escaped {
+			// Handle common escape sequences
+			switch c {
+			case 'n':
+				sb.WriteByte('\n')
+			case 't':
+				sb.WriteByte('\t')
+			case 'r':
+				sb.WriteByte('\r')
+			case '"':
+				sb.WriteByte('"')
+			case '\\':
+				sb.WriteByte('\\')
+			default:
+				sb.WriteByte(c)
+			}
+			escaped = false
+		} else if c == '\\' {
+			escaped = true
+		} else if c == '"' {
+			// End of string
+			break
+		} else {
+			sb.WriteByte(c)
+		}
+	}
+	
+	return sb.String()
 }
 
 // capturePane captures the tmux pane content.

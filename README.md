@@ -235,14 +235,15 @@ The workflow now uses **separate Claude agents** with structured handoffs:
 
 ### Agent Sessions
 
-Each phase spawns a fresh Claude agent in its own tmux session:
+Each agent runs in its own tmux session for isolation and observability:
 
-| Session | Purpose |
-|---------|---------|
-| `boatman-executor` | Initial code generation |
-| `boatman-reviewer-1` | First code review |
-| `boatman-refactor-1` | First refactor (if needed) |
-| `boatman-reviewer-2` | Second review (if needed) |
+| Session | Purpose | Handoff |
+|---------|---------|---------|
+| `boatman-planner` | Analyze ticket, explore codebase | → JSON plan |
+| `boatman-executor` | Implement solution | → Git changes |
+| `boatman-reviewer-1` | First code review | → Pass/Fail + issues |
+| `boatman-refactor-1` | First refactor | → Updated files |
+| `boatman-reviewer-2` | Second review | → Pass/Fail |
 | ... | Continues until pass or max iterations |
 
 ### Structured Handoffs
