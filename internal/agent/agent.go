@@ -1,5 +1,5 @@
 // Package agent orchestrates the complete workflow:
-// fetch ticket → create worktree → execute → review → refactor → PR
+// fetch ticket → create worktree → validate → execute → test → review → verify → refactor → PR
 package agent
 
 import (
@@ -8,15 +8,21 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/handshake/boatmanmode/internal/config"
+	"github.com/handshake/boatmanmode/internal/contextpin"
+	"github.com/handshake/boatmanmode/internal/coordinator"
+	"github.com/handshake/boatmanmode/internal/diffverify"
 	"github.com/handshake/boatmanmode/internal/executor"
 	"github.com/handshake/boatmanmode/internal/github"
 	"github.com/handshake/boatmanmode/internal/handoff"
 	"github.com/handshake/boatmanmode/internal/linear"
 	"github.com/handshake/boatmanmode/internal/planner"
+	"github.com/handshake/boatmanmode/internal/preflight"
 	"github.com/handshake/boatmanmode/internal/scottbott"
+	"github.com/handshake/boatmanmode/internal/testrunner"
 	"github.com/handshake/boatmanmode/internal/worktree"
 )
 
@@ -24,14 +30,17 @@ import (
 type Agent struct {
 	config       *config.Config
 	linearClient *linear.Client
+	coordinator  *coordinator.Coordinator
 }
 
 // WorkResult represents the outcome of the work command.
 type WorkResult struct {
-	PRCreated  bool
-	PRURL      string
-	Message    string
-	Iterations int
+	PRCreated    bool
+	PRURL        string
+	Message      string
+	Iterations   int
+	TestsPassed  bool
+	TestCoverage float64
 }
 
 // New creates a new Agent.
@@ -39,14 +48,19 @@ func New(cfg *config.Config) (*Agent, error) {
 	return &Agent{
 		config:       cfg,
 		linearClient: linear.New(cfg.LinearKey),
+		coordinator:  coordinator.New(),
 	}, nil
 }
 
 // Work executes the complete workflow for a ticket.
 func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) {
 	totalStart := time.Now()
-	
-	printStep(1, 8, "Fetching ticket from Linear")
+
+	// Start the coordinator
+	a.coordinator.Start(ctx)
+	defer a.coordinator.Stop()
+
+	printStep(1, 9, "Fetching ticket from Linear")
 	fmt.Printf("   🎫 Ticket ID: %s\n", ticketID)
 
 	ticket, err := a.linearClient.GetTicket(ctx, ticketID)
@@ -62,8 +76,8 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	fmt.Println()
 
 	// Step 2: Create worktree
-	printStep(2, 8, "Setting up git worktree")
-	
+	printStep(2, 9, "Setting up git worktree")
+
 	repoPath, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get working directory: %w", err)
@@ -88,20 +102,68 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	fmt.Printf("   📁 Worktree: %s\n", wt.Path)
 	fmt.Println()
 
-	// Step 3: Planning - Claude agent analyzes ticket and codebase
-	printStep(3, 8, "Planning (analyzing ticket & codebase)")
-	
-	planAgent := planner.New(wt.Path)
-	plan, err := planAgent.Analyze(ctx, ticket)
-	if err != nil {
-		fmt.Printf("   ⚠️  Planning failed: %v (continuing without plan)\n", err)
-		plan = nil
+	// Initialize context pinner for multi-file coordination
+	pinner := contextpin.New(wt.Path)
+	pinner.SetCoordinator(a.coordinator)
+
+	// Step 3: Planning - Run in parallel with initial file analysis
+	printStep(3, 9, "Planning & analysis (parallel)")
+
+	var plan *planner.Plan
+	var planErr error
+	var wg sync.WaitGroup
+
+	// Start planner
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		planAgent := planner.New(wt.Path)
+		plan, planErr = planAgent.Analyze(ctx, ticket)
+		if planErr != nil {
+			fmt.Printf("   ⚠️  Planning failed: %v (continuing without plan)\n", planErr)
+			plan = nil
+		}
+	}()
+
+	wg.Wait()
+	fmt.Println()
+
+	// Step 4: Pre-flight validation
+	printStep(4, 9, "Pre-flight validation")
+
+	if plan != nil {
+		preflightAgent := preflight.New(wt.Path)
+		preflightAgent.SetCoordinator(a.coordinator)
+		validation, err := preflightAgent.Validate(ctx, plan)
+		if err != nil {
+			fmt.Printf("   ⚠️  Validation error: %v\n", err)
+		} else {
+			fmt.Printf("   %s\n", (&preflight.ValidationHandoff{Result: validation}).Concise())
+			if !validation.Valid {
+				fmt.Println("   ⚠️  Validation failed but continuing...")
+				for _, e := range validation.Errors {
+					fmt.Printf("      ❌ %s\n", e.Message)
+				}
+			}
+			for _, w := range validation.Warnings {
+				fmt.Printf("      ⚠️  %s\n", w.Message)
+			}
+		}
+
+		// Pin files from the plan for context consistency
+		if len(plan.RelevantFiles) > 0 {
+			fmt.Println("   📌 Pinning context for relevant files...")
+			pinner.AnalyzeFiles(plan.RelevantFiles)
+			if _, err := pinner.Pin("executor", plan.RelevantFiles, false); err != nil {
+				fmt.Printf("   ⚠️  Could not pin files: %v\n", err)
+			}
+		}
 	}
 	fmt.Println()
 
-	// Step 4: Execute the task with plan handoff
-	printStep(4, 8, "Executing development task")
-	
+	// Step 5: Execute the task with plan handoff
+	printStep(5, 9, "Executing development task")
+
 	exec := executor.New(wt.Path)
 	result, err := exec.ExecuteWithPlan(ctx, ticket, plan)
 	if err != nil {
@@ -119,42 +181,103 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 		return nil, fmt.Errorf("failed to stage changes: %w", err)
 	}
 
-	// Step 5-6: Review loop
-	printStep(5, 8, "Code review with ScottBott")
-	
-	var iterations int
+	// Step 6: Run tests (parallel with initial review)
+	printStep(6, 9, "Running tests & initial review (parallel)")
+
+	var testResult *testrunner.TestResult
 	var reviewResult *scottbott.ReviewResult
+	var initialDiff string
+
+	// Get diff for review
+	initialDiff, err = exec.GetDiff()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get diff: %w", err)
+	}
+
+	wg.Add(2)
+
+	// Run tests in parallel
+	go func() {
+		defer wg.Done()
+		testAgent := testrunner.New(wt.Path)
+		testAgent.SetCoordinator(a.coordinator)
+		testResult, _ = testAgent.RunForFiles(ctx, result.FilesChanged)
+	}()
+
+	// Run initial review in parallel
+	go func() {
+		defer wg.Done()
+		reviewHandoff := handoff.NewReviewHandoff(ticket, initialDiff, result.FilesChanged)
+		reviewer := scottbott.NewWithWorkDir(wt.Path, 1)
+		reviewResult, _ = reviewer.Review(ctx, reviewHandoff.Concise(), initialDiff)
+	}()
+
+	wg.Wait()
+
+	// Display test results
+	if testResult != nil {
+		fmt.Printf("   🧪 Tests: %s\n", (&testrunner.TestResultHandoff{Result: testResult}).Concise())
+	}
+
+	// Display review results
+	if reviewResult != nil {
+		fmt.Println(reviewResult.FormatReview())
+	}
+	fmt.Println()
+
+	// Step 7: Review & refactor loop with diff verification
+	printStep(7, 9, "Review & refactor loop")
+
+	var iterations int
+	var previousDiff = initialDiff
 
 	for iterations < a.config.MaxIterations {
 		iterations++
-		fmt.Printf("\n   🔄 Review iteration %d of %d\n", iterations, a.config.MaxIterations)
+		fmt.Printf("\n   🔄 Iteration %d of %d\n", iterations, a.config.MaxIterations)
 		fmt.Println("   ─────────────────────────────")
 
-		// Get diff for review
-		fmt.Println("   📊 Generating diff for review...")
-		diff, err := exec.GetDiff()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get diff: %w", err)
+		// If we already have a review from iteration 1, use it
+		if iterations == 1 && reviewResult != nil {
+			// Already have review from parallel execution
+		} else {
+			// Get fresh diff and review
+			diff, err := exec.GetDiff()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get diff: %w", err)
+			}
+			fmt.Printf("   📏 Diff size: %d lines\n", strings.Count(diff, "\n"))
+
+			reviewHandoff := handoff.NewReviewHandoff(ticket, diff, result.FilesChanged)
+			reviewer := scottbott.NewWithWorkDir(wt.Path, iterations)
+			reviewResult, err = reviewer.Review(ctx, reviewHandoff.ForTokenBudget(handoff.DefaultBudget.Context), diff)
+			if err != nil {
+				return nil, fmt.Errorf("review failed: %w", err)
+			}
+			fmt.Println(reviewResult.FormatReview())
+			previousDiff = diff
 		}
-		fmt.Printf("   📏 Diff size: %d lines\n", strings.Count(diff, "\n"))
-
-		// Create review handoff with concise context
-		reviewHandoff := handoff.NewReviewHandoff(ticket, diff, result.FilesChanged)
-
-		// Review with ScottBott - fresh agent for each review, runs in worktree
-		fmt.Println("   🤖 Invoking peer-review skill...")
-		reviewer := scottbott.NewWithWorkDir(wt.Path, iterations)
-		reviewResult, err = reviewer.Review(ctx, reviewHandoff.ToPrompt(), diff)
-		if err != nil {
-			return nil, fmt.Errorf("review failed: %w", err)
-		}
-		fmt.Println()
-
-		fmt.Println(reviewResult.FormatReview())
 
 		if reviewResult.Passed {
-			fmt.Println("   ✅ Review passed! Proceeding to PR...")
-			break
+			fmt.Println("   ✅ Review passed!")
+
+			// Run final tests to confirm
+			if testResult == nil || !testResult.Passed {
+				testAgent := testrunner.New(wt.Path)
+				testResult, _ = testAgent.RunForFiles(ctx, result.FilesChanged)
+				if testResult != nil && !testResult.Passed {
+					fmt.Printf("   ⚠️  Tests failed: %s\n", (&testrunner.TestResultHandoff{Result: testResult}).Concise())
+					// Continue to refactor to fix tests
+					reviewResult.Passed = false
+					reviewResult.Issues = append(reviewResult.Issues, scottbott.Issue{
+						Severity:    "major",
+						Description: fmt.Sprintf("Tests failed: %d failures", testResult.FailedTests),
+					})
+				}
+			}
+
+			if reviewResult.Passed {
+				break
+			}
 		}
 
 		if iterations >= a.config.MaxIterations {
@@ -162,13 +285,12 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 			break
 		}
 
-		// Refactor based on feedback - use a fresh agent for each iteration
-		printStep(6, 8, fmt.Sprintf("Refactoring (attempt %d)", iterations))
-		
-		// Create concise refactor handoff
+		// Refactor based on feedback
+		fmt.Printf("   🔧 Refactoring (attempt %d)...\n", iterations)
+
 		refactorExec := executor.NewRefactorExecutor(wt.Path, iterations)
 		currentCode, _ := refactorExec.GetSpecificFiles(result.FilesChanged)
-		
+
 		refactorHandoff := handoff.NewRefactorHandoff(
 			ticket,
 			reviewResult.GetIssueDescriptions(),
@@ -176,13 +298,26 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 			result.FilesChanged,
 			currentCode,
 		)
-		
+
 		refactorResult, err := refactorExec.RefactorWithHandoff(ctx, refactorHandoff)
 		if err != nil {
 			return nil, fmt.Errorf("refactor failed: %w", err)
 		}
-		
-		// Update the result with new files for next iteration
+
+		// Verify the diff addresses the issues
+		if len(reviewResult.Issues) > 0 {
+			newDiff, _ := exec.GetDiff()
+			verifier := diffverify.New(wt.Path)
+			verifier.SetCoordinator(a.coordinator)
+			verification, _ := verifier.Verify(ctx, reviewResult.Issues, previousDiff, newDiff)
+			if verification != nil {
+				fmt.Printf("   🔍 Verification: %s\n", (&diffverify.VerificationHandoff{Result: verification}).Concise())
+				if len(verification.UnaddressedIssues) > 0 {
+					fmt.Printf("   ⚠️  %d issues may not be addressed\n", len(verification.UnaddressedIssues))
+				}
+			}
+		}
+
 		result.FilesChanged = refactorResult.FilesChanged
 
 		if !refactorResult.Success {
@@ -196,6 +331,9 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 		}
 	}
 
+	// Release context pins
+	pinner.Unpin("executor")
+
 	// Only proceed if review passed
 	if !reviewResult.Passed {
 		return &WorkResult{
@@ -205,9 +343,9 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 		}, nil
 	}
 
-	// Step 6: Commit
-	printStep(7, 8, "Committing and pushing")
-	
+	// Step 8: Commit
+	printStep(8, 9, "Committing and pushing")
+
 	commitMsg := fmt.Sprintf("feat(%s): %s\n\n%s",
 		ticket.Identifier,
 		ticket.Title,
@@ -226,8 +364,8 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	}
 	fmt.Println()
 
-	// Step 7: Create PR
-	printStep(8, 8, "Creating pull request")
+	// Step 9: Create PR
+	printStep(9, 9, "Creating pull request")
 
 	prBody := fmt.Sprintf(`## %s
 
@@ -240,6 +378,11 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 ### Changes
 %s
 
+### Quality
+- Review iterations: %d
+- Tests: %s
+- Coverage: %.1f%%
+
 ---
 *Automated by BoatmanMode 🚣*
 `,
@@ -248,6 +391,9 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 		ticket.Identifier,
 		ticket.Description,
 		reviewResult.Summary,
+		iterations,
+		formatTestStatus(testResult),
+		getTestCoverage(testResult),
 	)
 
 	// Change to worktree directory for gh CLI
@@ -262,7 +408,7 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	}
 
 	totalElapsed := time.Since(totalStart)
-	
+
 	fmt.Println()
 	fmt.Println("═══════════════════════════════════════════════════════")
 	fmt.Println("✅ WORKFLOW COMPLETE")
@@ -270,16 +416,38 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	fmt.Printf("   🎫 Ticket:     %s\n", ticket.Identifier)
 	fmt.Printf("   🌿 Branch:     %s\n", branchName)
 	fmt.Printf("   🔄 Iterations: %d\n", iterations)
+	fmt.Printf("   🧪 Tests:      %s\n", formatTestStatus(testResult))
 	fmt.Printf("   ⏱️  Total time: %s\n", totalElapsed.Round(time.Second))
 	fmt.Printf("   🔗 PR:         %s\n", prResult.URL)
 	fmt.Println("═══════════════════════════════════════════════════════")
 
 	return &WorkResult{
-		PRCreated:  true,
-		PRURL:      prResult.URL,
-		Message:    "Successfully created PR",
-		Iterations: iterations,
+		PRCreated:    true,
+		PRURL:        prResult.URL,
+		Message:      "Successfully created PR",
+		Iterations:   iterations,
+		TestsPassed:  testResult == nil || testResult.Passed,
+		TestCoverage: getTestCoverage(testResult),
 	}, nil
+}
+
+// formatTestStatus formats test result for display.
+func formatTestStatus(result *testrunner.TestResult) string {
+	if result == nil {
+		return "N/A"
+	}
+	if result.Passed {
+		return fmt.Sprintf("✅ %d passed", result.PassedTests)
+	}
+	return fmt.Sprintf("❌ %d failed, %d passed", result.FailedTests, result.PassedTests)
+}
+
+// getTestCoverage extracts coverage from test result.
+func getTestCoverage(result *testrunner.TestResult) float64 {
+	if result == nil {
+		return 0
+	}
+	return result.Coverage
 }
 
 // printStep prints a formatted step header.
