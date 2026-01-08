@@ -219,10 +219,12 @@ type RefactorHandoff struct {
 	Guidance      string   // Review guidance
 	FilesToUpdate []string // Files that need changes
 	CurrentCode   string   // Current implementation
+	ProjectRules  string   // Project coding standards and rules (critical for proper fixes)
 }
 
 // NewRefactorHandoff creates a handoff for refactoring.
-func NewRefactorHandoff(ticket *linear.Ticket, issues []string, guidance string, filesToUpdate []string, currentCode string) *RefactorHandoff {
+// projectRules should contain the project's coding standards (from .cursorrules, CLAUDE.md, etc.)
+func NewRefactorHandoff(ticket *linear.Ticket, issues []string, guidance string, filesToUpdate []string, currentCode string, projectRules string) *RefactorHandoff {
 	return &RefactorHandoff{
 		TicketID:      ticket.Identifier,
 		Title:         ticket.Title,
@@ -231,6 +233,7 @@ func NewRefactorHandoff(ticket *linear.Ticket, issues []string, guidance string,
 		Guidance:      guidance,
 		FilesToUpdate: filesToUpdate,
 		CurrentCode:   currentCode,
+		ProjectRules:  projectRules,
 	}
 }
 
@@ -238,30 +241,41 @@ func NewRefactorHandoff(ticket *linear.Ticket, issues []string, guidance string,
 func (h *RefactorHandoff) Full() string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# Refactor: %s (%s)\n\n", h.Title, h.TicketID))
-	
+
+	// Project rules FIRST - these are critical for proper fixes
+	if h.ProjectRules != "" {
+		sb.WriteString("## Project Rules & Standards (MUST FOLLOW)\n\n")
+		sb.WriteString(h.ProjectRules)
+		sb.WriteString("\n\n---\n\n")
+	}
+
 	sb.WriteString("## Original Requirements\n\n")
 	sb.WriteString(h.Requirements)
-	
-	sb.WriteString("\n\n## Issues to Fix\n\n")
+
+	sb.WriteString("\n\n## Issues to Fix (MUST ADDRESS ALL)\n\n")
+	sb.WriteString("Review each issue below. The issues reference specific requirements from the ticket and project rules.\n\n")
 	for i, issue := range h.Issues {
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, issue))
 	}
-	
+
 	sb.WriteString("\n## Guidance\n\n")
 	sb.WriteString(h.Guidance)
-	
+
 	sb.WriteString("\n\n## Files to Update\n\n")
 	for _, f := range h.FilesToUpdate {
 		sb.WriteString(fmt.Sprintf("- %s\n", f))
 	}
-	
+
 	sb.WriteString("\n## Current Implementation\n\n")
 	sb.WriteString(h.CurrentCode)
-	
+
 	sb.WriteString("\n\n## Instructions\n\n")
-	sb.WriteString("Fix ALL listed issues. Output complete updated files using this format:\n\n")
+	sb.WriteString("1. Review the Project Rules & Standards above\n")
+	sb.WriteString("2. Review the Original Requirements from the ticket\n")
+	sb.WriteString("3. Fix ALL listed issues while following the project rules\n")
+	sb.WriteString("4. Output complete updated files using this format:\n\n")
 	sb.WriteString("### FILE: path/to/file.ext\n```\n// complete file contents\n```\n")
-	
+
 	return sb.String()
 }
 
@@ -289,41 +303,56 @@ func (h *RefactorHandoff) ForTokenBudget(maxTokens int) string {
 	if EstimateTokens(full) <= maxTokens {
 		return full
 	}
-	
-	// Build incrementally
+
+	// Build incrementally, prioritizing rules and issues
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("# Refactor: %s (%s)\n\n", h.Title, h.TicketID))
-	
+
+	// Project rules are critical - include them first (truncated if needed)
+	if h.ProjectRules != "" {
+		sb.WriteString("## Project Rules & Standards (MUST FOLLOW)\n\n")
+		// Reserve ~2000 tokens for rules - they're critical for correct fixes
+		sb.WriteString(TruncateToTokens(h.ProjectRules, 2000))
+		sb.WriteString("\n\n---\n\n")
+	}
+
+	// Original requirements (truncated if long)
+	if h.Requirements != "" {
+		sb.WriteString("## Original Requirements\n\n")
+		sb.WriteString(TruncateToTokens(h.Requirements, 1000))
+		sb.WriteString("\n\n")
+	}
+
 	// Issues are most important
 	sb.WriteString("## Issues to Fix (MUST ADDRESS ALL)\n\n")
 	for i, issue := range h.Issues {
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, issue))
 	}
-	
+
 	// Guidance is helpful
 	if h.Guidance != "" {
 		sb.WriteString("\n## Guidance\n\n")
 		sb.WriteString(TruncateToTokens(h.Guidance, 500))
 	}
-	
+
 	sb.WriteString("\n\n## Files to Update\n\n")
 	for _, f := range h.FilesToUpdate {
 		sb.WriteString(fmt.Sprintf("- %s\n", f))
 	}
-	
+
 	// Calculate remaining budget for code
 	headerTokens := EstimateTokens(sb.String())
 	codeBudget := maxTokens - headerTokens - 200
-	
+
 	if codeBudget > 500 {
 		sb.WriteString("\n## Current Implementation (truncated)\n\n")
 		sb.WriteString(TruncateToTokens(h.CurrentCode, codeBudget))
 	}
-	
+
 	sb.WriteString("\n\n## Instructions\n\n")
-	sb.WriteString("Fix ALL listed issues. Output complete updated files using format:\n")
+	sb.WriteString("Fix ALL listed issues following project rules. Output complete updated files:\n")
 	sb.WriteString("### FILE: path/to/file.ext\n```\n// contents\n```\n")
-	
+
 	return sb.String()
 }
 

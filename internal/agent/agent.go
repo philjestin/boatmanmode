@@ -291,12 +291,17 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 		refactorExec := executor.NewRefactorExecutor(wt.Path, iterations)
 		currentCode, _ := refactorExec.GetSpecificFiles(result.FilesChanged)
 
+		// Load project rules - CRITICAL for proper refactoring
+		// These rules contain coding standards that the refactor agent must follow
+		projectRules := refactorExec.LoadProjectRules()
+
 		refactorHandoff := handoff.NewRefactorHandoff(
 			ticket,
 			reviewResult.GetIssueDescriptions(),
 			reviewResult.Guidance,
 			result.FilesChanged,
 			currentCode,
+			projectRules,
 		)
 
 		refactorResult, err := refactorExec.RefactorWithHandoff(ctx, refactorHandoff)

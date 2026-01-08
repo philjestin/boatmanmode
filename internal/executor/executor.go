@@ -67,7 +67,7 @@ func (e *Executor) ExecuteWithPlan(ctx context.Context, ticket *linear.Ticket, p
 	}
 
 	// Load project rules (like Cursor does)
-	projectRules := e.loadProjectRules()
+	projectRules := e.LoadProjectRules()
 
 	// Build system prompt with project rules
 	systemPrompt := `You are an expert software developer. Execute the development task described.
@@ -246,12 +246,27 @@ Format your response with complete file contents:
 // RefactorWithHandoff uses a structured handoff for refactoring.
 func (e *Executor) RefactorWithHandoff(ctx context.Context, h *handoff.RefactorHandoff) (*ExecutionResult, error) {
 	prompt := h.ToPrompt()
-	
+
+	// Build system prompt - emphasize following project rules
 	systemPrompt := `You are refactoring code based on peer review feedback.
-Address ALL listed issues. Maintain functionality while improving quality.
-Output complete updated files using the specified format.`
+
+CRITICAL INSTRUCTIONS:
+1. The handoff contains "Project Rules & Standards" - you MUST follow these exactly
+2. The handoff contains "Original Requirements" from the ticket - ensure your fixes align with these
+3. Address ALL listed issues while following the project rules
+4. Maintain functionality while improving quality
+5. Output complete updated files using the specified format
+
+Common mistakes to avoid:
+- Ignoring project-specific patterns (e.g., authorization error handling)
+- Using errors-as-data when the rules say to raise exceptions (or vice versa)
+- Missing required fields from the schema
+- Not following the project's code organization conventions`
 
 	fmt.Printf("   📝 Handoff: %d issues, %d files\n", len(h.Issues), len(h.FilesToUpdate))
+	if h.ProjectRules != "" {
+		fmt.Println("   📋 Project rules included in handoff")
+	}
 	fmt.Println("   🤖 Sending refactor request...")
 
 	start := time.Now()
@@ -479,10 +494,11 @@ func extractSummary(response string) string {
 	return strings.TrimSpace(summary.String())
 }
 
-// loadProjectRules loads project rules from various sources (like Cursor does).
+// LoadProjectRules loads project rules from various sources (like Cursor does).
 // NOTE: Claude CLI automatically reads CLAUDE.md, so we skip that.
 // We limit total size to avoid overwhelming the context.
-func (e *Executor) loadProjectRules() string {
+// Exported so agent.go can use it for refactor handoffs.
+func (e *Executor) LoadProjectRules() string {
 	var rules strings.Builder
 	rulesCount := 0
 	maxSize := 50000 // 50KB max to avoid context bloat
