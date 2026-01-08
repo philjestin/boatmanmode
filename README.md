@@ -122,12 +122,14 @@ Tracks issues across review iterations:
 - Tracks persistent vs addressed issues
 - Provides iteration statistics
 
-### 💾 Checkpoint/Resume
-Saves progress at each workflow step:
-- Automatic state persistence
-- Resume from last successful step
-- Survives crashes and interruptions
-- Progress tracking and reporting
+### 💾 Git-Integrated Checkpoints
+Saves progress using git commits for durability:
+- **Git commits** at each checkpoint for durability
+- **Rollback** using `git reset` to any previous state
+- **Snapshot branches** for important milestones
+- **History browsing** with full audit trail
+- **Squash** checkpoint commits before PR creation
+- Resume from last successful step after crashes
 
 ### 🧠 Agent Memory
 Cross-session learning for improved performance:
@@ -356,16 +358,46 @@ Agents receive concise, focused context with dynamic compression:
 | Executor → Reviewer | Requirements, diff, test results | ~3000 tokens |
 | Reviewer → Refactor | Issues (deduplicated), guidance | ~2000 tokens |
 
-### Checkpoint System
+### Git-Integrated Checkpoint System
 
-Progress is saved at each step:
+Progress is saved as git commits for durability and rollback:
 
 ```bash
-# Checkpoints are saved in ~/.boatman/checkpoints/
-# Format: {ticket-id}_{timestamp}.json
+# Each step creates a checkpoint commit
+# Format: [checkpoint] ENG-123: complete execution (step: execution, iter: 1)
 
 # Resume an interrupted workflow
 boatman work ENG-123 --resume
+
+# View checkpoint history
+git log --oneline --grep "\[checkpoint\]"
+
+# Rollback to a previous checkpoint
+git reset --hard HEAD~2  # Go back 2 checkpoints
+
+# Create a snapshot branch before risky operation
+boatman checkpoint snapshot "before-refactor"
+
+# Squash checkpoint commits before PR
+boatman checkpoint squash "feat: implement feature ENG-123"
+```
+
+**Checkpoint commits include:**
+- Ticket ID and step name
+- Iteration number
+- Serialized agent state in `.boatman-state.json`
+- All file changes up to that point
+
+**Rollback scenarios:**
+```bash
+# Undo last refactor attempt
+git reset --hard HEAD~1
+
+# Go back to before review started
+boatman checkpoint rollback --step execution
+
+# Restore from snapshot branch
+git checkout checkpoint/ENG-123/before-review -- .
 ```
 
 ### Agent Memory
