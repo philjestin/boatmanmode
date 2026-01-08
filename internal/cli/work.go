@@ -34,10 +34,12 @@ func init() {
 	workCmd.Flags().String("base-branch", "main", "Base branch for worktree")
 	workCmd.Flags().Bool("auto-pr", true, "Automatically create PR on success")
 	workCmd.Flags().Bool("dry-run", false, "Run without making changes")
+	workCmd.Flags().Int("timeout", 60, "Timeout in minutes for each Claude agent")
 
 	viper.BindPFlag("max_iterations", workCmd.Flags().Lookup("max-iterations"))
 	viper.BindPFlag("base_branch", workCmd.Flags().Lookup("base-branch"))
 	viper.BindPFlag("auto_pr", workCmd.Flags().Lookup("auto-pr"))
+	viper.BindPFlag("timeout", workCmd.Flags().Lookup("timeout"))
 }
 
 // runWork executes the main workflow for a given ticket.
@@ -73,4 +75,5 @@ func runWork(cmd *cobra.Command, args []string) error {
 
 	return nil
 }
+
 

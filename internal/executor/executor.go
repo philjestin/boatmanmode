@@ -480,76 +480,47 @@ func extractSummary(response string) string {
 }
 
 // loadProjectRules loads project rules from various sources (like Cursor does).
-// Checks: .cursorrules, .cursor/rules/**/*.md, CLAUDE.md
+// NOTE: Claude CLI automatically reads CLAUDE.md, so we skip that.
+// We limit total size to avoid overwhelming the context.
 func (e *Executor) loadProjectRules() string {
 	var rules strings.Builder
 	rulesCount := 0
+	maxSize := 50000 // 50KB max to avoid context bloat
 
-	// 1. Check for CLAUDE.md (Claude CLI reads this automatically, but include for completeness)
-	claudeMD := filepath.Join(e.worktreePath, "CLAUDE.md")
-	if content, err := os.ReadFile(claudeMD); err == nil {
-		rules.WriteString("# Project Instructions (from CLAUDE.md)\n\n")
-		rules.WriteString(string(content))
-		rules.WriteString("\n\n")
-		rulesCount++
-	}
-
-	// 2. Check for .cursorrules (single file)
+	// 1. Check for .cursorrules (single file - highest priority)
 	cursorrules := filepath.Join(e.worktreePath, ".cursorrules")
-	if content, err := os.ReadFile(cursorrules); err == nil {
+	if content, err := os.ReadFile(cursorrules); err == nil && len(content) < maxSize {
 		rules.WriteString("# Cursor Rules (from .cursorrules)\n\n")
 		rules.WriteString(string(content))
 		rules.WriteString("\n\n")
 		rulesCount++
 	}
 
-	// 3. Check for .cursor/rules/ (recursively load all .md/.mdc files)
-	cursorRulesDir := filepath.Join(e.worktreePath, ".cursor", "rules")
-	rulesCount += e.loadRulesFromDir(cursorRulesDir, "Cursor", &rules)
-
-	// 4. Check for .ai/rules/
-	aiRulesDir := filepath.Join(e.worktreePath, ".ai", "rules")
-	rulesCount += e.loadRulesFromDir(aiRulesDir, "AI", &rules)
+	// 2. Check for pack-specific CLAUDE.md (more focused than root)
+	// Look for packs/*/CLAUDE.md that might be relevant
+	packsDir := filepath.Join(e.worktreePath, "packs")
+	if entries, err := os.ReadDir(packsDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			packClaude := filepath.Join(packsDir, entry.Name(), "CLAUDE.md")
+			if content, err := os.ReadFile(packClaude); err == nil {
+				if rules.Len()+len(content) < maxSize {
+					rules.WriteString(fmt.Sprintf("# Pack Rules: %s/CLAUDE.md\n\n", entry.Name()))
+					rules.WriteString(string(content))
+					rules.WriteString("\n\n")
+					rulesCount++
+				}
+				break // Only include first pack CLAUDE.md to limit size
+			}
+		}
+	}
 
 	if rulesCount > 0 {
-		fmt.Printf("   📋 Loaded %d project rule file(s)\n", rulesCount)
+		fmt.Printf("   📋 Loaded %d project rule file(s) (%d KB)\n", rulesCount, rules.Len()/1024)
 	}
 
 	return strings.TrimSpace(rules.String())
 }
 
-// loadRulesFromDir recursively loads rule files from a directory.
-func (e *Executor) loadRulesFromDir(dir, prefix string, rules *strings.Builder) int {
-	count := 0
-	
-	filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // Skip errors
-		}
-		if info.IsDir() {
-			return nil
-		}
-		
-		// Only load .md and .mdc files
-		ext := filepath.Ext(info.Name())
-		if ext != ".md" && ext != ".mdc" {
-			return nil
-		}
-		
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		
-		// Get relative path from rules dir for context
-		relPath, _ := filepath.Rel(dir, path)
-		rules.WriteString(fmt.Sprintf("# %s Rule: %s\n\n", prefix, relPath))
-		rules.WriteString(string(content))
-		rules.WriteString("\n\n")
-		count++
-		
-		return nil
-	})
-	
-	return count
-}

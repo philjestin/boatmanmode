@@ -261,7 +261,7 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	timeout := time.After(30 * time.Minute)
+	timeout := time.After(60 * time.Minute) // 60 min timeout for complex tasks
 	startTime := time.Now()
 	lastDot := time.Now()
 	
