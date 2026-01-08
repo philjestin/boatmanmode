@@ -45,9 +45,9 @@ An AI-powered development agent that automates ticket execution with peer review
 - Fresh agent per iteration (clean context, no token bloat)
 - Structured handoffs between agents (concise context)
 
-### 📺 Live Streaming (Watch Mode)
+### 📺 Live Activity Streaming
 - Watch Claude work in real-time via tmux
-- Each agent runs in its own named session
+- See every tool call: file reads, edits, bash commands
 - Full visibility into AI decision-making
 
 ### 🌲 Git Worktree Isolation
@@ -126,6 +126,20 @@ tmux attach -t boatman-executor
 tmux attach -t boatman-reviewer-1
 ```
 
+**What you'll see:**
+```
+🤖 Claude is working (with file write permissions)...
+📝 Activity will stream below:
+
+🔧 Running: ls -la packs/
+📖 Reading: packs/annotations/app/graphql/consumer/types/...
+✏️  Editing: packs/annotations/app/graphql/consumer/mutations/...
+📝 Writing: packs/annotations/spec/graphql/consumer/...
+🔍 Searching files...
+
+📊 Task completed!
+```
+
 **tmux controls:**
 - `Ctrl+B` then `D` - Detach
 - `Ctrl+B` then arrow keys - Switch panes
@@ -133,9 +147,10 @@ tmux attach -t boatman-reviewer-1
 ### Manage Sessions
 
 ```bash
-boatman sessions list      # List active sessions
-boatman sessions kill      # Kill all sessions
-boatman sessions cleanup   # Clean up idle sessions
+boatman sessions list       # List active sessions
+boatman sessions kill       # Kill all boatman sessions
+boatman sessions kill -f    # Also kill orphaned claude processes
+boatman sessions cleanup    # Clean up idle sessions
 ```
 
 ### Manage Worktrees
@@ -210,6 +225,35 @@ claude -p --agent peer-review "review this diff..."
 
 If the skill exists in your repo's `.claude/` directory, it's used. Otherwise, falls back to a built-in review prompt.
 
+## How It Works
+
+### Claude's Agentic Mode
+
+BoatmanMode leverages Claude's **agentic mode** - Claude directly reads and writes files in the worktree using its built-in tools (Read, Edit, Write, Bash, Glob, Grep). After Claude completes, BoatmanMode detects what changed via `git status`.
+
+**Security**: BoatmanMode runs Claude with `--dangerously-skip-permissions` to allow file writes without prompting. This is safe because:
+- Claude only has access to the isolated worktree
+- All changes are tracked via git
+- You can review before committing/pushing
+
+### Live Activity Streaming
+
+BoatmanMode uses `--output-format stream-json` to capture Claude's tool usage in real-time. The stream is parsed to show human-readable activity:
+
+| Icon | Meaning |
+|------|---------|
+| 🔧 | Running a bash command |
+| 📖 | Reading a file |
+| ✏️ | Editing a file |
+| 📝 | Writing a new file |
+| 🔍 | Searching files (glob/grep) |
+| 💭 | Claude's thinking |
+| 📊 | Task completed |
+
+### File Change Detection
+
+After Claude completes, BoatmanMode runs `git status --porcelain` to detect all modified, added, and deleted files. This is more reliable than parsing output since Claude writes files directly.
+
 ## Writing Effective Tickets
 
 Include:
@@ -261,18 +305,24 @@ boatmanmode/
 
 ## Troubleshooting
 
-### "No files were extracted from response"
+### "No files were changed in the worktree"
 
-Claude didn't output code in the expected format. Possible causes:
-- Ticket too vague - add more detail
-- Claude asked questions instead of coding
-- Run `boatman watch` to see what Claude output
+Claude ran but didn't modify any files. Possible causes:
+- Ticket too vague - add more specific requirements
+- Implementation already exists - Claude may just be analyzing
+- Run `boatman watch` to see what Claude was doing
 
-### Can't see output when watching
+### Claude seems stuck
 
-Install `expect` for unbuffered streaming:
+Check if Claude is actually working:
 ```bash
-brew install expect
+boatman watch  # See live activity
+```
+
+If truly stuck, kill and restart:
+```bash
+boatman sessions kill --force
+boatman work ENG-123
 ```
 
 ### Session not found
@@ -290,6 +340,10 @@ cd .worktrees/<name>                     # Go there
 git diff                                 # See changes
 boatman worktree commit                  # Commit them
 ```
+
+### Timeout waiting for Claude
+
+Large codebases take longer. The default timeout is 30 minutes. If Claude is actively working (visible in `boatman watch`), just wait. If stuck, use `boatman sessions kill --force`.
 
 ## License
 

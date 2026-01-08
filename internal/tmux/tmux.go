@@ -93,9 +93,9 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 	if err := os.WriteFile(promptFile, []byte(userPrompt), 0644); err != nil {
 		return "", fmt.Errorf("failed to write prompt file: %w", err)
 	}
-	defer os.Remove(promptFile)
+	// Don't delete prompt file until after completion - tmux needs it
 
-	// Create runner script
+	// Create runner script that pipes prompt via stdin
 	scriptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-run.sh", sess.Name))
 	
 	var script string
@@ -104,23 +104,59 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 		if err := os.WriteFile(sysFile, []byte(systemPrompt), 0644); err != nil {
 			return "", fmt.Errorf("failed to write system prompt file: %w", err)
 		}
-		defer os.Remove(sysFile)
+		// Don't delete until after completion
 		
-		// Run claude with unbuffered output using script or stdbuf
-		// The prompt is passed as a file argument to avoid stdin buffering issues
+		// Use stream-json to show Claude's activity in real-time
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
-echo '🤖 Claude is working...'
+echo '🤖 Claude is working (with file write permissions)...'
+echo '📝 Activity will stream below:'
 echo ''
 
-# Try to use unbuffer for real-time output, fall back to stdbuf, then direct
-if command -v unbuffer &> /dev/null; then
-    unbuffer claude -p --output-format text --system-prompt "$(cat '%s')" "$(cat '%s')"
-elif command -v stdbuf &> /dev/null; then
-    stdbuf -oL claude -p --output-format text --system-prompt "$(cat '%s')" "$(cat '%s')"
-else
-    claude -p --output-format text --system-prompt "$(cat '%s')" "$(cat '%s')"
-fi
+# Read into variables
+SYSTEM_PROMPT="$(cat '%s')"
+USER_PROMPT="$(cat '%s')"
+
+# Run Claude with stream-json and parse output to show activity
+claude -p --dangerously-skip-permissions --verbose --output-format stream-json --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | while IFS= read -r line; do
+    # Parse JSON to show activity
+    if echo "$line" | grep -q '"type":"assistant"'; then
+        if echo "$line" | grep -q '"name":"Bash"'; then
+            cmd=$(echo "$line" | sed -n 's/.*"command":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$cmd" ]; then
+                echo "🔧 Running: $cmd"
+            fi
+        elif echo "$line" | grep -q '"name":"Edit"'; then
+            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$file" ]; then
+                echo "✏️  Editing: $file"
+            fi
+        elif echo "$line" | grep -q '"name":"Write"'; then
+            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$file" ]; then
+                echo "📝 Writing: $file"
+            fi
+        elif echo "$line" | grep -q '"name":"Read"'; then
+            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$file" ]; then
+                echo "📖 Reading: $file"
+            fi
+        elif echo "$line" | grep -q '"name":"Glob"'; then
+            echo "🔍 Searching files..."
+        elif echo "$line" | grep -q '"name":"Grep"'; then
+            echo "🔍 Searching content..."
+        elif echo "$line" | grep -q '"type":"text"' && ! echo "$line" | grep -q '"tool_use"'; then
+            # Extract and show text content (Claude's thinking)
+            text=$(echo "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | head -1 | head -c 200)
+            if [ -n "$text" ]; then
+                echo "💭 $text"
+            fi
+        fi
+    elif echo "$line" | grep -q '"type":"result"'; then
+        echo ""
+        echo "📊 Task completed!"
+    fi
+done
 
 EXIT_CODE=$?
 echo ''
@@ -131,21 +167,60 @@ else
     echo '❌ Claude exited with code: '$EXIT_CODE
 fi
 touch '%s'
-`, sysFile, promptFile, sysFile, promptFile, sysFile, promptFile, sess.DoneFile)
+
+# Cleanup
+rm -f '%s' '%s' '%s'
+`, sysFile, promptFile, sess.DoneFile, promptFile, sysFile, scriptFile)
 	} else {
+		// Use stream-json to show Claude's activity in real-time
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
-echo '🤖 Claude is working...'
+echo '🤖 Claude is working (with file write permissions)...'
+echo '📝 Activity will stream below:'
 echo ''
 
-# Try to use unbuffer for real-time output, fall back to stdbuf, then direct
-if command -v unbuffer &> /dev/null; then
-    unbuffer claude -p --output-format text "$(cat '%s')"
-elif command -v stdbuf &> /dev/null; then
-    stdbuf -oL claude -p --output-format text "$(cat '%s')"
-else
-    claude -p --output-format text "$(cat '%s')"
-fi
+# Read into variable
+USER_PROMPT="$(cat '%s')"
+
+# Run Claude with stream-json and parse output to show activity
+claude -p --dangerously-skip-permissions --verbose --output-format stream-json "$USER_PROMPT" 2>&1 | while IFS= read -r line; do
+    # Parse JSON to show activity
+    if echo "$line" | grep -q '"type":"assistant"'; then
+        if echo "$line" | grep -q '"name":"Bash"'; then
+            cmd=$(echo "$line" | sed -n 's/.*"command":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$cmd" ]; then
+                echo "🔧 Running: $cmd"
+            fi
+        elif echo "$line" | grep -q '"name":"Edit"'; then
+            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$file" ]; then
+                echo "✏️  Editing: $file"
+            fi
+        elif echo "$line" | grep -q '"name":"Write"'; then
+            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$file" ]; then
+                echo "📝 Writing: $file"
+            fi
+        elif echo "$line" | grep -q '"name":"Read"'; then
+            file=$(echo "$line" | sed -n 's/.*"file_path":"\([^"]*\)".*/\1/p' | head -1)
+            if [ -n "$file" ]; then
+                echo "📖 Reading: $file"
+            fi
+        elif echo "$line" | grep -q '"name":"Glob"'; then
+            echo "🔍 Searching files..."
+        elif echo "$line" | grep -q '"name":"Grep"'; then
+            echo "🔍 Searching content..."
+        elif echo "$line" | grep -q '"type":"text"' && ! echo "$line" | grep -q '"tool_use"'; then
+            text=$(echo "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | head -1 | head -c 200)
+            if [ -n "$text" ]; then
+                echo "💭 $text"
+            fi
+        fi
+    elif echo "$line" | grep -q '"type":"result"'; then
+        echo ""
+        echo "📊 Task completed!"
+    fi
+done
 
 EXIT_CODE=$?
 echo ''
@@ -156,13 +231,16 @@ else
     echo '❌ Claude exited with code: '$EXIT_CODE
 fi
 touch '%s'
-`, promptFile, promptFile, promptFile, sess.DoneFile)
+
+# Cleanup
+rm -f '%s' '%s'
+`, promptFile, sess.DoneFile, promptFile, scriptFile)
 	}
 
 	if err := os.WriteFile(scriptFile, []byte(script), 0755); err != nil {
 		return "", fmt.Errorf("failed to write script: %w", err)
 	}
-	defer os.Remove(scriptFile)
+	// Script cleans itself up after running
 
 	// Clear done file
 	os.Remove(sess.DoneFile)
@@ -186,7 +264,7 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	timeout := time.After(15 * time.Minute)
+	timeout := time.After(30 * time.Minute)
 	startTime := time.Now()
 	lastDot := time.Now()
 
@@ -234,6 +312,7 @@ func (m *Manager) capturePane(sess *Session, lines int) (string, error) {
 }
 
 // extractClaudeOutput extracts just Claude's response from the captured pane.
+// Now handles the parsed stream-json activity output.
 func extractClaudeOutput(paneContent string) string {
 	lines := strings.Split(paneContent, "\n")
 	
@@ -241,8 +320,8 @@ func extractClaudeOutput(paneContent string) string {
 	inOutput := false
 	
 	for _, line := range lines {
-		// Start capturing after "Starting Claude..."
-		if strings.Contains(line, "Starting Claude") {
+		// Start capturing after "Activity will stream" or "Claude is working"
+		if strings.Contains(line, "Activity will stream") || strings.Contains(line, "Claude is working") {
 			inOutput = true
 			continue
 		}

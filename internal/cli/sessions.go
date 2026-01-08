@@ -56,9 +56,15 @@ var sessionsAttachCmd = &cobra.Command{
 	},
 }
 
+var forceKill bool
+
 var sessionsKillCmd = &cobra.Command{
 	Use:   "kill [session-name]",
 	Short: "Kill an agent session",
+	Long: `Kill boatman agent sessions.
+
+Without arguments, kills all boatman tmux sessions.
+With --force, also kills any orphaned claude processes.`,
 	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		mgr := tmux.NewManager("boatman")
@@ -69,10 +75,20 @@ var sessionsKillCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			for _, name := range sessions {
-				sess := &tmux.Session{Name: name}
-				mgr.KillSession(sess)
-				fmt.Printf("Killed session: %s\n", name)
+			
+			if len(sessions) == 0 {
+				fmt.Println("No boatman sessions running")
+			} else {
+				for _, name := range sessions {
+					sess := &tmux.Session{Name: name}
+					mgr.KillSession(sess)
+					fmt.Printf("Killed session: %s\n", name)
+				}
+			}
+
+			// With --force, also kill orphaned claude processes
+			if forceKill {
+				killOrphanedClaude()
 			}
 			return nil
 		}
@@ -84,6 +100,30 @@ var sessionsKillCmd = &cobra.Command{
 		fmt.Printf("Killed session: %s\n", args[0])
 		return nil
 	},
+}
+
+// killOrphanedClaude finds and kills any claude processes that might be orphaned.
+func killOrphanedClaude() {
+	// Find claude processes
+	cmd := exec.Command("pgrep", "-f", "claude -p")
+	output, err := cmd.Output()
+	if err != nil {
+		// No processes found
+		return
+	}
+
+	pids := strings.Fields(string(output))
+	if len(pids) == 0 {
+		return
+	}
+
+	fmt.Printf("Found %d orphaned claude process(es)\n", len(pids))
+	for _, pid := range pids {
+		killCmd := exec.Command("kill", "-9", pid)
+		if err := killCmd.Run(); err == nil {
+			fmt.Printf("Killed claude process: %s\n", pid)
+		}
+	}
 }
 
 // watchCmd watches active agent sessions in a split view.
@@ -205,4 +245,7 @@ func init() {
 	sessionsCmd.AddCommand(sessionsAttachCmd)
 	sessionsCmd.AddCommand(sessionsKillCmd)
 	sessionsCmd.AddCommand(cleanupCmd)
+	
+	// Add --force flag to kill command
+	sessionsKillCmd.Flags().BoolVarP(&forceKill, "force", "f", false, "Also kill orphaned claude processes")
 }

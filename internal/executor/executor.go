@@ -52,38 +52,11 @@ func (e *Executor) Execute(ctx context.Context, ticket *linear.Ticket) (*Executi
 	fmt.Println("   📖 Building execution prompt from ticket...")
 	prompt := e.buildPrompt(ticket)
 
-	systemPrompt := `You are an expert software developer. Execute the given task by generating code.
-
-CRITICAL RULES:
-1. You MUST output actual file contents - never just describe what files to create
-2. You MUST use the exact format below for EVERY file
-3. Do NOT ask for permissions - just output the code
-4. Do NOT say "I'll provide files" - actually provide them
-5. If implementation exists, add/modify tests or make improvements as needed
-
-OUTPUT FORMAT (follow exactly):
-
-## Analysis
-One paragraph explaining your approach.
-
-## Changes
-
-### FILE: path/to/file.rb
-` + "```ruby" + `
-# Complete file contents here - NOT a description, actual code
-class MyClass
-  def my_method
-    # implementation
-  end
-end
-` + "```" + `
-
-### FILE: path/to/another_file.rb
-` + "```ruby" + `
-# Another complete file
-` + "```" + `
-
-REMEMBER: Every ### FILE: block MUST contain actual code inside the code fence, not a description of what code to write.`
+	// Simple prompt - let Claude use its agentic tools to write files directly
+	systemPrompt := `You are an expert software developer. Execute the development task described.
+Use your file editing tools to create and modify files as needed.
+Do not ask for permission - just implement the solution.
+If implementation already exists, add tests or make improvements as needed.`
 
 	fmt.Println("   🤖 Sending task to Claude (streaming)...")
 	fmt.Printf("   📝 Prompt size: %d chars\n", len(prompt))
@@ -99,34 +72,31 @@ REMEMBER: Every ### FILE: block MUST contain actual code inside the code fence, 
 	fmt.Printf("   ⏱️  Claude responded in %s\n", elapsed.Round(time.Second))
 	fmt.Printf("   📄 Response size: %d chars\n", len(response))
 
-	// Parse and apply file changes
-	fmt.Println("   📦 Parsing response and extracting file changes...")
-	filesChanged, err := e.parseAndApplyChanges(response)
+	// Claude in agentic mode writes files directly - detect what changed via git
+	fmt.Println("   📦 Detecting file changes in worktree...")
+	filesChanged, err := e.detectChangedFiles()
 	if err != nil {
-		return &ExecutionResult{
-			Success: false,
-			Error:   err,
-		}, nil
+		return nil, fmt.Errorf("failed to detect changes: %w", err)
 	}
 
 	if len(filesChanged) == 0 {
-		// No files found - show what Claude returned for debugging
-		fmt.Println("   ⚠️  No files were extracted from response!")
-		fmt.Println("   📋 Response preview:")
+		// No files changed - show Claude's response for debugging
+		fmt.Println("   ⚠️  No files were changed in the worktree!")
+		fmt.Println("   📋 Claude's response:")
 		preview := response
-		if len(preview) > 1500 {
-			preview = preview[:1500] + "\n... (truncated)"
+		if len(preview) > 2000 {
+			preview = preview[:2000] + "\n... (truncated)"
 		}
 		for _, line := range strings.Split(preview, "\n") {
 			fmt.Printf("      │ %s\n", line)
 		}
 		return &ExecutionResult{
 			Success: false,
-			Error:   fmt.Errorf("claude did not produce any file changes - check response format"),
+			Error:   fmt.Errorf("claude did not produce any file changes - check response above"),
 		}, nil
 	}
 
-	fmt.Printf("   ✏️  Writing %d files to worktree\n", len(filesChanged))
+	fmt.Printf("   ✏️  Claude modified %d files:\n", len(filesChanged))
 	for _, f := range filesChanged {
 		fmt.Printf("      • %s\n", f)
 	}
@@ -136,6 +106,37 @@ REMEMBER: Every ### FILE: block MUST contain actual code inside the code fence, 
 		FilesChanged: filesChanged,
 		Summary:      extractSummary(response),
 	}, nil
+}
+
+// detectChangedFiles uses git status to find what files Claude modified.
+func (e *Executor) detectChangedFiles() ([]string, error) {
+	// Get list of changed files (staged, unstaged, and untracked)
+	cmd := exec.Command("git", "status", "--porcelain")
+	cmd.Dir = e.worktreePath
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git status failed: %w", err)
+	}
+
+	var files []string
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Format is "XY filename" where XY is the status
+		// Skip the first 3 characters (status + space)
+		if len(line) > 3 {
+			file := line[3:]
+			// Handle renamed files: "R  old -> new"
+			if idx := strings.Index(file, " -> "); idx != -1 {
+				file = file[idx+4:]
+			}
+			files = append(files, file)
+		}
+	}
+
+	return files, nil
 }
 
 // Refactor applies feedback from ScottBott to improve the code.
