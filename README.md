@@ -472,24 +472,28 @@ Cross-session learning improves over time:
 boatmanmode/
 ├── cmd/boatman/main.go       # Entry point
 ├── internal/
-│   ├── agent/                # Workflow orchestration
+│   ├── agent/                # Workflow orchestration (refactored into step methods)
 │   ├── checkpoint/           # Progress saving/resume
-│   ├── claude/               # Claude CLI wrapper
+│   ├── claude/               # Claude CLI wrapper (with retry + context cancellation)
 │   ├── cli/                  # Cobra commands
-│   ├── config/               # Configuration
+│   ├── config/               # Configuration (expanded with nested configs)
 │   ├── contextpin/           # File dependency tracking
-│   ├── coordinator/          # Parallel agent coordination
+│   ├── coordinator/          # Parallel agent coordination (thread-safe, observable)
 │   ├── diffverify/           # Diff verification agent
 │   ├── executor/             # Code generation
 │   ├── filesummary/          # Smart file summarization
 │   ├── github/               # PR creation (gh CLI)
 │   ├── handoff/              # Agent context passing + compression
+│   ├── healthcheck/          # External dependency verification (NEW)
 │   ├── issuetracker/         # Issue deduplication
-│   ├── linear/               # Linear API client
+│   ├── linear/               # Linear API client (with retry logic)
+│   ├── logger/               # Structured logging via log/slog (NEW)
 │   ├── memory/               # Cross-session learning
 │   ├── planner/              # Plan generation
 │   ├── preflight/            # Pre-execution validation
+│   ├── retry/                # Exponential backoff retry logic (NEW)
 │   ├── scottbott/            # Peer review
+│   ├── testenv/              # E2E test environment with mocks (NEW)
 │   ├── testrunner/           # Test execution
 │   ├── tmux/                 # Session management
 │   └── worktree/             # Git worktree management
@@ -504,9 +508,10 @@ boatmanmode/
 | `CLAUDE_CODE_USE_VERTEX` | Set to `1` for Vertex AI | If using Vertex |
 | `CLOUD_ML_REGION` | Vertex AI region | If using Vertex |
 | `ANTHROPIC_VERTEX_PROJECT_ID` | GCP project ID | If using Vertex |
-| `BOATMAN_DEBUG` | Set to `1` for debug output | No |
+| `BOATMAN_DEBUG` | Set to `1` for debug output (structured logs) | No |
 | `BOATMAN_CHECKPOINT_DIR` | Custom checkpoint directory | No |
 | `BOATMAN_MEMORY_DIR` | Custom memory directory | No |
+| `LINEAR_API_URL` | Override Linear API URL (for testing) | No |
 
 ## Troubleshooting
 
@@ -556,10 +561,63 @@ boatman work ENG-123 --resume  # Resume from checkpoint
 
 Large codebases take longer. The default timeout is 30 minutes. If Claude is actively working (visible in `boatman watch`), just wait. If stuck, use `boatman sessions kill --force`.
 
+### Retry exhausted for API calls
+
+If you see "failed after N attempts", the Linear API or Claude CLI is having issues:
+```bash
+# Check if services are accessible
+curl -I https://api.linear.app/graphql
+claude --version
+
+# Increase retry attempts in config
+# ~/.boatman.yaml
+retry:
+  max_attempts: 5
+  initial_delay: 2s
+```
+
+### Dropped messages warning
+
+If you see "coordinator message channel full, message dropped":
+- This indicates high message volume between agents
+- Increase buffer sizes in config:
+```yaml
+coordinator:
+  message_buffer_size: 2000
+  subscriber_buffer_size: 200
+```
+
+### Health check failures
+
+If startup fails with "missing required dependencies":
+```bash
+# Verify all tools are installed and in PATH
+which git gh claude tmux
+
+# Check specific tool versions
+git --version
+gh --version
+claude --version
+```
+
+### Debug mode
+
+For detailed logging, enable debug mode:
+```bash
+export BOATMAN_DEBUG=1
+boatman work ENG-123
+```
+
+This outputs structured logs showing:
+- Retry attempts and delays
+- Dropped messages
+- Context cancellation
+- Coordinator state changes
+
 ## Running Tests
 
 ```bash
-# Run all tests
+# Run all unit tests
 go test ./...
 
 # Run with verbose output
@@ -568,10 +626,73 @@ go test -v ./...
 # Run specific package tests
 go test -v ./internal/coordinator
 go test -v ./internal/checkpoint
+go test -v ./internal/retry
 
 # Run with coverage
 go test -cover ./...
+
+# Run E2E tests (includes mock servers)
+go test ./internal/testenv/... -tags=e2e
+
+# Run all tests including E2E
+go test ./... -tags=e2e -v
 ```
+
+### Test Packages
+
+| Package | Tests | Description |
+|---------|-------|-------------|
+| `coordinator` | 17 | Work claiming, file locking, atomic ops, cleanup |
+| `retry` | 14 | Exponential backoff, jitter, permanent errors |
+| `healthcheck` | 12 | Dependency checks, timeouts, formatting |
+| `logger` | 12 | Level filtering, JSON output, context |
+| `config` | 13 | Defaults, custom values, nested configs |
+| `testenv` | 18 | Mock servers, fixtures, e2e workflows |
+| `agent` | 13 | Integration tests, parallel agents |
+
+### E2E Test Environment
+
+The `testenv` package provides a complete mock environment:
+
+```go
+func TestMyWorkflow(t *testing.T) {
+    env := testenv.New(t).Setup()
+    defer env.Cleanup()
+
+    // Set custom Linear ticket
+    env.SetLinearTicket("ENG-123", testenv.DefaultTicket())
+
+    // Set Claude response
+    env.SetClaudeResponse("I'll implement this feature...")
+
+    // Run commands with mock environment
+    output, err := env.RunInRepo(ctx, "go", "test", "./...")
+}
+```
+
+## Code Quality
+
+### Recent Improvements
+
+The codebase has been hardened with the following improvements:
+
+| Category | Changes |
+|----------|---------|
+| **Thread Safety** | Coordinator `running` flag uses `atomic.Bool`; no data races |
+| **Error Handling** | Removed silent error swallowing (e.g., `os.Chdir` errors) |
+| **Memory Management** | Coordinator `Stop()` clears all maps to prevent leaks |
+| **Observability** | Dropped messages logged with `slog.Warn`; metrics tracked |
+| **Resilience** | Exponential backoff retry for Linear API and Claude CLI |
+| **Cancellation** | Claude streaming respects context cancellation |
+| **Configuration** | All hardcoded values moved to config structs |
+| **Testability** | `agent.Work()` refactored into 11 focused step methods |
+
+### Architecture Decisions
+
+- **No `os.Chdir`**: Commands use `cmd.Dir` instead of changing process state
+- **Structured logging**: `log/slog` for consistent, parseable output
+- **Atomic operations**: Thread-safe coordinator without excessive locking
+- **Graceful cleanup**: Resources released in reverse order on shutdown
 
 ## License
 
