@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/handshake/boatmanmode/internal/retry"
+	"github.com/philjestin/boatmanmode/internal/retry"
 )
 
 const apiURL = "https://api.linear.app/graphql"

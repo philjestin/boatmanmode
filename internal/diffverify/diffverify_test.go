@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/handshake/boatmanmode/internal/scottbott"
+	"github.com/philjestin/boatmanmode/internal/scottbott"
 )
 
 func TestParseDiff(t *testing.T) {

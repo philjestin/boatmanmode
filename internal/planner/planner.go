@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/handshake/boatmanmode/internal/claude"
-	"github.com/handshake/boatmanmode/internal/linear"
+	"github.com/philjestin/boatmanmode/internal/claude"
+	"github.com/philjestin/boatmanmode/internal/linear"
 )
 
 // Plan contains the structured output from the planning agent.

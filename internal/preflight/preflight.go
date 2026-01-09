@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/handshake/boatmanmode/internal/coordinator"
-	"github.com/handshake/boatmanmode/internal/planner"
+	"github.com/philjestin/boatmanmode/internal/coordinator"
+	"github.com/philjestin/boatmanmode/internal/planner"
 )
 
 // ValidationResult contains the outcome of pre-flight checks.

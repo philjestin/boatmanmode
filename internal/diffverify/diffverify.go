@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/handshake/boatmanmode/internal/coordinator"
-	"github.com/handshake/boatmanmode/internal/scottbott"
+	"github.com/philjestin/boatmanmode/internal/coordinator"
+	"github.com/philjestin/boatmanmode/internal/scottbott"
 )
 
 // VerificationResult contains the outcome of diff verification.

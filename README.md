@@ -193,7 +193,7 @@ export ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
 ## Installation
 
 ```bash
-git clone https://github.com/handshake/boatmanmode
+git clone https://github.com/philjestin/boatmanmode
 cd boatmanmode
 go build -o boatman ./cmd/boatman
 
@@ -703,4 +703,4 @@ MIT
 
 ---
 
-*Built with 🚣 by the Handshake team*
+*Built with 🚣 by the philjestin team*

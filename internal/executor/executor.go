@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/handshake/boatmanmode/internal/claude"
-	"github.com/handshake/boatmanmode/internal/handoff"
-	"github.com/handshake/boatmanmode/internal/linear"
-	"github.com/handshake/boatmanmode/internal/planner"
+	"github.com/philjestin/boatmanmode/internal/claude"
+	"github.com/philjestin/boatmanmode/internal/handoff"
+	"github.com/philjestin/boatmanmode/internal/linear"
+	"github.com/philjestin/boatmanmode/internal/planner"
 )
 
 // Executor performs AI-powered development tasks.

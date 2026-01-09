@@ -3,7 +3,7 @@ package issuetracker
 import (
 	"testing"
 
-	"github.com/handshake/boatmanmode/internal/scottbott"
+	"github.com/philjestin/boatmanmode/internal/scottbott"
 )
 
 func TestNewTracker(t *testing.T) {

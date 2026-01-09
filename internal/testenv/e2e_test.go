@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/handshake/boatmanmode/internal/config"
-	"github.com/handshake/boatmanmode/internal/coordinator"
-	"github.com/handshake/boatmanmode/internal/healthcheck"
+	"github.com/philjestin/boatmanmode/internal/config"
+	"github.com/philjestin/boatmanmode/internal/coordinator"
+	"github.com/philjestin/boatmanmode/internal/healthcheck"
 )
 
 // TestE2EHealthCheck tests the healthcheck in a mock environment.

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/handshake/boatmanmode/internal/scottbott"
+	"github.com/philjestin/boatmanmode/internal/scottbott"
 )
 
 // TrackedIssue extends an issue with tracking metadata.

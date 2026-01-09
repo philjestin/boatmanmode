@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/handshake/boatmanmode/internal/coordinator"
+	"github.com/philjestin/boatmanmode/internal/coordinator"
 )
 
 // Pin represents a context pin for coordinated file access.

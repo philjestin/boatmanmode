@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/handshake/boatmanmode/internal/planner"
+	"github.com/philjestin/boatmanmode/internal/planner"
 )
 
 func TestValidateExistingFiles(t *testing.T) {

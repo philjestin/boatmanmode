@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/handshake/boatmanmode/internal/linear"
+	"github.com/philjestin/boatmanmode/internal/linear"
 )
 
 // Handoff is the interface for passing context between agents.

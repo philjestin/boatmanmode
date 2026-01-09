@@ -14,8 +14,8 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/handshake/boatmanmode/internal/retry"
-	"github.com/handshake/boatmanmode/internal/tmux"
+	"github.com/philjestin/boatmanmode/internal/retry"
+	"github.com/philjestin/boatmanmode/internal/tmux"
 )
 
 // Client wraps the Claude CLI.

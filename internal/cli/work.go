@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/handshake/boatmanmode/internal/agent"
-	"github.com/handshake/boatmanmode/internal/config"
+	"github.com/philjestin/boatmanmode/internal/agent"
+	"github.com/philjestin/boatmanmode/internal/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )

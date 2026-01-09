@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/handshake/boatmanmode/internal/tmux"
+	"github.com/philjestin/boatmanmode/internal/tmux"
 	"github.com/spf13/cobra"
 )
 

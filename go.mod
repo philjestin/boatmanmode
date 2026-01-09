@@ -1,4 +1,4 @@
-module github.com/handshake/boatmanmode
+module github.com/philjestin/boatmanmode
 
 go 1.23
 

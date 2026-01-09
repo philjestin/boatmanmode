@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/handshake/boatmanmode/internal/coordinator"
+	"github.com/philjestin/boatmanmode/internal/coordinator"
 )
 
 // TestResult contains the outcome of test execution.

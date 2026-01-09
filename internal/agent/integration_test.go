@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/handshake/boatmanmode/internal/checkpoint"
-	"github.com/handshake/boatmanmode/internal/coordinator"
-	"github.com/handshake/boatmanmode/internal/issuetracker"
-	"github.com/handshake/boatmanmode/internal/memory"
-	"github.com/handshake/boatmanmode/internal/planner"
-	"github.com/handshake/boatmanmode/internal/preflight"
-	"github.com/handshake/boatmanmode/internal/scottbott"
+	"github.com/philjestin/boatmanmode/internal/checkpoint"
+	"github.com/philjestin/boatmanmode/internal/coordinator"
+	"github.com/philjestin/boatmanmode/internal/issuetracker"
+	"github.com/philjestin/boatmanmode/internal/memory"
+	"github.com/philjestin/boatmanmode/internal/planner"
+	"github.com/philjestin/boatmanmode/internal/preflight"
+	"github.com/philjestin/boatmanmode/internal/scottbott"
 )
 
 // TestCoordinatorWithMultipleAgents tests that multiple agents can coordinate.
