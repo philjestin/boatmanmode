@@ -8,6 +8,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
+
+	"github.com/handshake/boatmanmode/internal/retry"
 )
 
 const apiURL = "https://api.linear.app/graphql"
@@ -120,7 +123,7 @@ func (c *Client) GetTicket(ctx context.Context, identifier string) (*Ticket, err
 	}, nil
 }
 
-// execute performs a GraphQL request to Linear.
+// execute performs a GraphQL request to Linear with retry logic.
 func (c *Client) execute(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
 	body := map[string]interface{}{
 		"query":     query,
@@ -132,30 +135,63 @@ func (c *Client) execute(ctx context.Context, query string, variables map[string
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(jsonBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+	var result []byte
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", c.apiKey)
+	err = retry.Do(ctx, retry.APIConfig(), "Linear API request", func() error {
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(jsonBody))
+		if err != nil {
+			return retry.Permanent(fmt.Errorf("failed to create request: %w", err))
+		}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", c.apiKey)
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
-	}
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("request failed: %w", err) // Retryable
+		}
+		defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(respBody))
-	}
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %w", err)
+		}
 
-	return respBody, nil
+		// 4xx errors are permanent (client errors)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return retry.Permanent(fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(respBody)))
+		}
+
+		// 5xx errors are retryable (server errors)
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return retry.Permanent(fmt.Errorf("API returned unexpected status %d: %s", resp.StatusCode, string(respBody)))
+		}
+
+		result = respBody
+		return nil
+	})
+
+	return result, err
 }
 
-
+// isRetryableError checks if an error message indicates a retryable condition.
+func isRetryableError(msg string) bool {
+	retryablePatterns := []string{
+		"rate limit",
+		"timeout",
+		"temporarily unavailable",
+		"service unavailable",
+		"internal server error",
+	}
+	lower := strings.ToLower(msg)
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(lower, pattern) {
+			return true
+		}
+	}
+	return false
+}

@@ -9,10 +9,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
 
+	"github.com/handshake/boatmanmode/internal/retry"
 	"github.com/handshake/boatmanmode/internal/tmux"
 )
 
@@ -127,8 +129,32 @@ func (c *Client) messageTmux(ctx context.Context, systemPrompt, userPrompt strin
 	return c.TmuxManager.RunClaudeStreaming(ctx, sess, systemPrompt, userPrompt)
 }
 
-// messageStreaming sends a message and streams the response.
+// messageStreaming sends a message and streams the response with retry support.
 func (c *Client) messageStreaming(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	var fullResponse string
+
+	err := retry.Do(ctx, retry.CLIConfig(), "Claude CLI", func() error {
+		result, err := c.doStreamingRequest(ctx, systemPrompt, userPrompt)
+		if err != nil {
+			// Check for retryable error patterns
+			errStr := err.Error()
+			if strings.Contains(errStr, "rate limit") ||
+				strings.Contains(errStr, "overloaded") ||
+				strings.Contains(errStr, "temporarily") {
+				return err // Retryable
+			}
+			// Most CLI errors are permanent
+			return retry.Permanent(err)
+		}
+		fullResponse = result
+		return nil
+	})
+
+	return fullResponse, err
+}
+
+// doStreamingRequest performs a single streaming request to Claude.
+func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
@@ -169,64 +195,90 @@ func (c *Client) messageStreaming(ctx context.Context, systemPrompt, userPrompt 
 
 	fmt.Println("   ┌─────────────────────────────────────────────────────────────")
 
-	lineBuffer := ""
-	reader := bufio.NewReader(stdout)
-	for {
-		line, err := reader.ReadString('\n')
+	// Create a done channel to signal when reading is complete
+	readDone := make(chan error, 1)
+
+	go func() {
+		lineBuffer := ""
+		reader := bufio.NewReader(stdout)
+		for {
+			// Check for context cancellation between reads
+			select {
+			case <-ctx.Done():
+				readDone <- ctx.Err()
+				return
+			default:
+			}
+
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					// Print any remaining content
+					if lineBuffer != "" {
+						fmt.Printf("   │ %s\n", lineBuffer)
+					}
+					readDone <- nil
+					return
+				}
+				readDone <- fmt.Errorf("error reading stream: %w", err)
+				return
+			}
+
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+
+			var chunk StreamChunk
+			if err := json.Unmarshal([]byte(line), &chunk); err != nil {
+				if c.Debug {
+					slog.Debug("failed to parse chunk", "chunk", line, "error", err)
+				}
+				continue
+			}
+
+			// Handle different chunk types
+			var text string
+			switch chunk.Type {
+			case "content_block_delta":
+				text = chunk.Content
+			case "message_stop":
+				continue
+			case "result":
+				for _, content := range chunk.Message.Content {
+					if content.Type == "text" {
+						text = content.Text
+					}
+				}
+			}
+
+			if text != "" {
+				fullResponse.WriteString(text)
+
+				// Stream to terminal with formatting
+				lineBuffer += text
+				for {
+					idx := strings.Index(lineBuffer, "\n")
+					if idx == -1 {
+						break
+					}
+					fmt.Printf("   │ %s\n", lineBuffer[:idx])
+					lineBuffer = lineBuffer[idx+1:]
+				}
+			}
+		}
+	}()
+
+	// Wait for either context cancellation or read completion
+	select {
+	case <-ctx.Done():
+		// Context cancelled - process will be killed by CommandContext
+		<-readDone // Wait for reader goroutine to finish
+		return "", ctx.Err()
+	case err := <-readDone:
 		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", fmt.Errorf("error reading stream: %w", err)
+			return "", err
 		}
-
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		var chunk StreamChunk
-		if err := json.Unmarshal([]byte(line), &chunk); err != nil {
-			if c.Debug {
-				fmt.Printf("\n[DEBUG] Failed to parse chunk: %s\n", line)
-			}
-			continue
-		}
-
-		// Handle different chunk types
-		var text string
-		switch chunk.Type {
-		case "content_block_delta":
-			text = chunk.Content
-		case "message_stop":
-			continue
-		case "result":
-			for _, content := range chunk.Message.Content {
-				if content.Type == "text" {
-					text = content.Text
-				}
-			}
-		}
-
-		if text != "" {
-			fullResponse.WriteString(text)
-
-			// Stream to terminal with formatting
-			lineBuffer += text
-			for {
-				idx := strings.Index(lineBuffer, "\n")
-				if idx == -1 {
-					break
-				}
-				fmt.Printf("   │ %s\n", lineBuffer[:idx])
-				lineBuffer = lineBuffer[idx+1:]
-			}
-		}
-	}
-
-	// Print any remaining content
-	if lineBuffer != "" {
-		fmt.Printf("   │ %s\n", lineBuffer)
 	}
 
 	if err := cmd.Wait(); err != nil {

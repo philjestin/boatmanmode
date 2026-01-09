@@ -15,13 +15,23 @@ type PRResult struct {
 }
 
 // CreatePR creates a pull request using the gh CLI.
+// Deprecated: Use CreatePRInDir instead for explicit working directory.
 func CreatePR(ctx context.Context, title, body, baseBranch string) (*PRResult, error) {
+	return CreatePRInDir(ctx, "", title, body, baseBranch)
+}
+
+// CreatePRInDir creates a pull request using the gh CLI in the specified directory.
+func CreatePRInDir(ctx context.Context, workDir, title, body, baseBranch string) (*PRResult, error) {
 	// Use gh CLI which is already authenticated
 	cmd := exec.CommandContext(ctx, "gh", "pr", "create",
 		"--title", title,
 		"--body", body,
 		"--base", baseBranch,
 	)
+
+	if workDir != "" {
+		cmd.Dir = workDir
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

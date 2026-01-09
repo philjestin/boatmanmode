@@ -138,6 +138,33 @@ Cross-session learning for improved performance:
 - Caches effective prompts
 - Per-project memory storage
 
+### 🛡️ Resilience & Reliability (NEW)
+Production-ready error handling and recovery:
+- **Retry logic** with exponential backoff for Linear API and Claude CLI
+- **Health checks** verify `git`, `gh`, `claude`, `tmux` at startup
+- **Graceful degradation** when optional dependencies unavailable
+- **Context cancellation** properly propagates to long-running operations
+
+### 📊 Observability (NEW)
+Structured logging and metrics for debugging:
+- **Structured logging** via `log/slog` with levels (DEBUG, INFO, WARN, ERROR)
+- **Dropped message tracking** when coordinator channels overflow
+- **Debug mode** with `BOATMAN_DEBUG=1` for verbose output
+
+### ⚙️ Configuration (NEW)
+Externalized settings for all components:
+- Coordinator buffer sizes
+- Retry attempts and delays
+- Claude CLI settings
+- Token budgets for handoffs
+
+### 🧪 E2E Test Environment (NEW)
+Complete test harness for integration testing:
+- Mock Linear GraphQL server
+- Mock Claude CLI with canned responses
+- Mock GitHub CLI for PR creation
+- Fixture-based test scenarios
+
 ---
 
 ## Prerequisites
@@ -190,13 +217,37 @@ linear_key: lin_api_xxxxx
 max_iterations: 3
 base_branch: main
 
-# New options
+# Feature toggles
 enable_preflight: true
 enable_tests: true
 enable_diff_verify: true
 enable_memory: true
 checkpoint_dir: ~/.boatman/checkpoints
 memory_dir: ~/.boatman/memory
+
+# Coordinator settings (advanced)
+coordinator:
+  message_buffer_size: 1000      # Main message channel buffer
+  subscriber_buffer_size: 100    # Per-agent channel buffer
+
+# Retry settings
+retry:
+  max_attempts: 3
+  initial_delay: 500ms
+  max_delay: 30s
+
+# Claude CLI settings
+claude:
+  command: claude                # Claude CLI command
+  use_tmux: false               # Use tmux for large prompts
+  large_prompt_threshold: 100000 # Character count for tmux
+  timeout: 0                     # 0 = no timeout
+
+# Token budgets for handoffs
+token_budget:
+  context: 8000
+  plan: 2000
+  review: 4000
 ```
 
 ## Usage

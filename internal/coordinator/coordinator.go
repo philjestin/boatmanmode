@@ -6,7 +6,9 @@ package coordinator
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,35 +35,105 @@ type Coordinator struct {
 	waiters   map[string][]chan struct{}
 	waitersMu sync.Mutex
 
-	// Running state
-	running bool
+	// Running state (atomic for thread-safe access)
+	running atomic.Bool
 	done    chan struct{}
+
+	// Metrics for observability
+	droppedMessages atomic.Int64
+
+	// Configuration
+	subscriberBufferSize int
 }
 
-// New creates a new Coordinator.
+// Options configures coordinator behavior.
+type Options struct {
+	// MessageBufferSize is the size of the main message channel.
+	MessageBufferSize int
+
+	// SubscriberBufferSize is the size of per-subscriber channels.
+	SubscriberBufferSize int
+}
+
+// DefaultOptions returns sensible defaults.
+func DefaultOptions() Options {
+	return Options{
+		MessageBufferSize:    1000,
+		SubscriberBufferSize: 100,
+	}
+}
+
+// New creates a new Coordinator with default options.
 func New() *Coordinator {
+	return NewWithOptions(DefaultOptions())
+}
+
+// NewWithOptions creates a new Coordinator with custom options.
+func NewWithOptions(opts Options) *Coordinator {
+	if opts.MessageBufferSize <= 0 {
+		opts.MessageBufferSize = 1000
+	}
+	if opts.SubscriberBufferSize <= 0 {
+		opts.SubscriberBufferSize = 100
+	}
+
 	return &Coordinator{
-		registry:      NewRegistry(),
-		messages:      make(chan Message, 1000),
-		subscribers:   make(map[string]chan Message),
-		claimedWork:   make(map[string]string),
-		sharedContext: make(map[string]interface{}),
-		fileLocks:     make(map[string]string),
-		waiters:       make(map[string][]chan struct{}),
-		done:          make(chan struct{}),
+		registry:             NewRegistry(),
+		messages:             make(chan Message, opts.MessageBufferSize),
+		subscribers:          make(map[string]chan Message),
+		claimedWork:          make(map[string]string),
+		sharedContext:        make(map[string]interface{}),
+		fileLocks:            make(map[string]string),
+		waiters:              make(map[string][]chan struct{}),
+		done:                 make(chan struct{}),
+		subscriberBufferSize: opts.SubscriberBufferSize,
 	}
 }
 
 // Start begins processing messages.
 func (c *Coordinator) Start(ctx context.Context) {
-	c.running = true
+	c.running.Store(true)
 	go c.processMessages(ctx)
 }
 
-// Stop halts message processing.
+// Stop halts message processing and cleans up resources.
 func (c *Coordinator) Stop() {
-	c.running = false
+	c.running.Store(false)
 	close(c.done)
+
+	// Clean up maps to prevent memory leaks
+	c.claimedWorkMu.Lock()
+	clear(c.claimedWork)
+	c.claimedWorkMu.Unlock()
+
+	c.sharedContextMu.Lock()
+	clear(c.sharedContext)
+	c.sharedContextMu.Unlock()
+
+	c.fileLocksMu.Lock()
+	clear(c.fileLocks)
+	c.fileLocksMu.Unlock()
+
+	c.waitersMu.Lock()
+	// Close any remaining waiter channels
+	for _, waiters := range c.waiters {
+		for _, ch := range waiters {
+			select {
+			case <-ch:
+				// Already closed
+			default:
+				close(ch)
+			}
+		}
+	}
+	clear(c.waiters)
+	c.waitersMu.Unlock()
+
+	// Log dropped message stats
+	if dropped := c.droppedMessages.Load(); dropped > 0 {
+		slog.Warn("coordinator stopped with dropped messages",
+			"dropped_count", dropped)
+	}
 }
 
 // Register adds an agent to the coordinator.
@@ -70,8 +142,12 @@ func (c *Coordinator) Register(agent Agent) {
 	agent.SetCoordinator(c)
 
 	// Create subscriber channel for this agent
+	bufSize := c.subscriberBufferSize
+	if bufSize <= 0 {
+		bufSize = 100
+	}
 	c.subscribersMu.Lock()
-	c.subscribers[agent.ID()] = make(chan Message, 100)
+	c.subscribers[agent.ID()] = make(chan Message, bufSize)
 	c.subscribersMu.Unlock()
 }
 
@@ -85,8 +161,16 @@ func (c *Coordinator) Subscribe(agentID string) <-chan Message {
 // Send sends a message to the coordinator.
 func (c *Coordinator) Send(msg Message) {
 	msg.Timestamp = time.Now()
-	if c.running {
-		c.messages <- msg
+	if c.running.Load() {
+		select {
+		case c.messages <- msg:
+		default:
+			c.droppedMessages.Add(1)
+			slog.Warn("coordinator message channel full, message dropped",
+				"msg_type", msg.Type,
+				"from", msg.From,
+				"to", msg.To)
+		}
 	}
 }
 
@@ -322,7 +406,11 @@ func (c *Coordinator) broadcast(msg Message) {
 			select {
 			case ch <- msg:
 			default:
-				// Channel full, drop message
+				c.droppedMessages.Add(1)
+				slog.Warn("subscriber channel full, message dropped",
+					"target", msg.To,
+					"msg_type", msg.Type,
+					"from", msg.From)
 			}
 		}
 		return
@@ -336,7 +424,11 @@ func (c *Coordinator) broadcast(msg Message) {
 		select {
 		case ch <- msg:
 		default:
-			// Channel full, drop message
+			c.droppedMessages.Add(1)
+			slog.Warn("subscriber channel full, broadcast message dropped",
+				"target", agentID,
+				"msg_type", msg.Type,
+				"from", msg.From)
 		}
 	}
 }
@@ -351,7 +443,11 @@ func (c *Coordinator) sendTo(agentID string, msg Message) {
 		select {
 		case ch <- msg:
 		default:
-			// Channel full
+			c.droppedMessages.Add(1)
+			slog.Warn("agent channel full, message dropped",
+				"target", agentID,
+				"msg_type", msg.Type,
+				"from", msg.From)
 		}
 	}
 }
@@ -523,4 +619,9 @@ func (c *Coordinator) IsFileLocked(file string) (bool, string) {
 // Registry returns the agent registry.
 func (c *Coordinator) Registry() *Registry {
 	return c.registry
+}
+
+// DroppedMessages returns the count of messages dropped due to full channels.
+func (c *Coordinator) DroppedMessages() int64 {
+	return c.droppedMessages.Load()
 }
