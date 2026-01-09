@@ -308,7 +308,7 @@ func (a *Agent) stepTestAndReview(ctx context.Context, wc *workContext) error {
 	go func() {
 		defer wg.Done()
 		reviewHandoff := handoff.NewReviewHandoff(wc.ticket, initialDiff, wc.execResult.FilesChanged)
-		reviewer := scottbott.NewWithWorkDir(wc.worktree.Path, 1)
+		reviewer := scottbott.NewWithSkill(wc.worktree.Path, 1, a.config.ReviewSkill)
 		wc.reviewResult, _ = reviewer.Review(ctx, reviewHandoff.Concise(), initialDiff)
 	}()
 
@@ -391,7 +391,7 @@ func (a *Agent) doReview(ctx context.Context, wc *workContext, previousDiff *str
 	fmt.Printf("   📏 Diff size: %d lines\n", strings.Count(diff, "\n"))
 
 	reviewHandoff := handoff.NewReviewHandoff(wc.ticket, diff, wc.execResult.FilesChanged)
-	reviewer := scottbott.NewWithWorkDir(wc.worktree.Path, wc.iterations)
+	reviewer := scottbott.NewWithSkill(wc.worktree.Path, wc.iterations, a.config.ReviewSkill)
 	reviewResult, err := reviewer.Review(ctx, reviewHandoff.ForTokenBudget(handoff.DefaultBudget.Context), diff)
 	if err != nil {
 		return fmt.Errorf("review failed: %w", err)

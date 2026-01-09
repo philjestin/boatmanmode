@@ -18,6 +18,7 @@ type Config struct {
 	MaxIterations int
 	BaseBranch    string
 	AutoPR        bool
+	ReviewSkill   string
 
 	// Coordinator settings
 	Coordinator CoordinatorConfig
@@ -90,6 +91,7 @@ func Load() (*Config, error) {
 		MaxIterations: getIntOrDefault("max_iterations", 3),
 		BaseBranch:    getStringOrDefault("base_branch", "main"),
 		AutoPR:        viper.GetBool("auto_pr"),
+		ReviewSkill:   getStringOrDefault("review_skill", "peer-review"),
 		Debug:         os.Getenv("BOATMAN_DEBUG") == "1",
 
 		Coordinator: CoordinatorConfig{

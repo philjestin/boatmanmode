@@ -1,6 +1,6 @@
 # BoatmanMode 🚣
 
-An AI-powered development agent that automates ticket execution with peer review. BoatmanMode fetches tickets from Linear, generates code using Claude, reviews changes with the `peer-review` skill, iterates until quality passes, and creates pull requests.
+An AI-powered development agent that automates ticket execution with peer review. BoatmanMode fetches tickets from Linear, generates code using Claude, reviews changes with a configurable Claude skill (default: `peer-review`), iterates until quality passes, and creates pull requests.
 
 ## Architecture
 
@@ -43,7 +43,8 @@ An AI-powered development agent that automates ticket execution with peer review
 - Creates appropriate tests alongside code
 
 ### 👀 Peer Review with Claude Skill
-- Uses the `peer-review` Claude skill from your repo
+- Uses a configurable Claude skill for code review (default: `peer-review`)
+- Specify a custom skill via `--review-skill` or config
 - Automated pass/fail verdict with detailed feedback
 - Falls back to built-in review if skill not found
 
@@ -216,6 +217,7 @@ Create `~/.boatman.yaml`:
 linear_key: lin_api_xxxxx
 max_iterations: 3
 base_branch: main
+review_skill: peer-review  # Claude skill/agent for code review
 
 # Feature toggles
 enable_preflight: true
@@ -330,9 +332,10 @@ git checkout philmiddleton/eng-123-feature
 ### Command Options
 
 ```bash
-boatman work ENG-123 --max-iterations 5    # More refactor attempts
-boatman work ENG-123 --base-branch develop # Different base branch
-boatman work ENG-123 --dry-run             # Preview without changes
+boatman work ENG-123 --max-iterations 5        # More refactor attempts
+boatman work ENG-123 --base-branch develop     # Different base branch
+boatman work ENG-123 --dry-run                 # Preview without changes
+boatman work ENG-123 --review-skill my-review  # Use custom review skill
 ```
 
 ## Workflow Details

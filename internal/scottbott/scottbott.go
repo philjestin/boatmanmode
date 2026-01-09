@@ -32,11 +32,12 @@ type Issue struct {
 	Suggestion  string `json:"suggestion"`
 }
 
-// ScottBott invokes the peer-review skill.
+// ScottBott invokes the review skill.
 type ScottBott struct {
 	workDir     string
 	sessionName string
 	outputDir   string
+	skill       string
 }
 
 // New creates a new ScottBott instance.
@@ -44,6 +45,7 @@ func New() *ScottBott {
 	return &ScottBott{
 		sessionName: "reviewer",
 		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:       "peer-review",
 	}
 }
 
@@ -52,6 +54,7 @@ func NewForIteration(iteration int) *ScottBott {
 	return &ScottBott{
 		sessionName: fmt.Sprintf("reviewer-%d", iteration),
 		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:       "peer-review",
 	}
 }
 
@@ -61,6 +64,20 @@ func NewWithWorkDir(workDir string, iteration int) *ScottBott {
 		workDir:     workDir,
 		sessionName: fmt.Sprintf("reviewer-%d", iteration),
 		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:       "peer-review",
+	}
+}
+
+// NewWithSkill creates a ScottBott with a specific skill/agent for review.
+func NewWithSkill(workDir string, iteration int, skill string) *ScottBott {
+	if skill == "" {
+		skill = "peer-review"
+	}
+	return &ScottBott{
+		workDir:     workDir,
+		sessionName: fmt.Sprintf("reviewer-%d", iteration),
+		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:       skill,
 	}
 }
 
@@ -80,18 +97,18 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 	outputFile := filepath.Join(s.outputDir, fmt.Sprintf("%s.out", s.sessionName))
 
 	fmt.Printf("   📏 Review: %d chars context, %d chars diff\n", len(ticketContext), len(diff))
-	fmt.Println("   🔍 Invoking peer-review skill...")
+	fmt.Printf("   🔍 Invoking %s skill...\n", s.skill)
 
 	start := time.Now()
 
-	// Invoke Claude with the peer-review agent/skill
-	// The peer-review skill should exist in the repo's .claude/ directory
-	cmd := exec.CommandContext(ctx, "claude", 
+	// Invoke Claude with the configured review agent/skill
+	// The skill should exist in the repo's .claude/ directory
+	cmd := exec.CommandContext(ctx, "claude",
 		"-p",
-		"--agent", "peer-review",  // Use the peer-review skill
+		"--agent", s.skill,
 		"--output-format", "text",
 	)
-	
+
 	// Pipe the prompt via stdin
 	promptContent, _ := os.ReadFile(promptFile)
 	cmd.Stdin = strings.NewReader(string(promptContent))
@@ -104,8 +121,8 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 	elapsed := time.Since(start)
 
 	if err != nil {
-		// If peer-review skill doesn't exist, fall back to system prompt
-		fmt.Println("   ⚠️  peer-review skill not found, using fallback...")
+		// If skill doesn't exist, fall back to system prompt
+		fmt.Printf("   ⚠️  %s skill not found, using fallback...\n", s.skill)
 		return s.reviewWithFallback(ctx, ticketContext, diff)
 	}
 
@@ -140,7 +157,7 @@ Pass if: no critical issues, ≤2 major issues, code meets requirements.`
 
 	promptFile := filepath.Join(s.outputDir, fmt.Sprintf("%s-fallback-prompt.txt", s.sessionName))
 	sysFile := filepath.Join(s.outputDir, fmt.Sprintf("%s-fallback-system.txt", s.sessionName))
-	
+
 	os.WriteFile(promptFile, []byte(prompt), 0644)
 	os.WriteFile(sysFile, []byte(systemPrompt), 0644)
 	defer os.Remove(promptFile)
@@ -186,7 +203,7 @@ Review these changes against the requirements. Provide your assessment.`, ticket
 func parseReviewResponse(response string) (*ReviewResult, error) {
 	// First try JSON extraction
 	jsonStr := extractJSON(response)
-	
+
 	var result ReviewResult
 	if err := json.Unmarshal([]byte(jsonStr), &result); err == nil {
 		return &result, nil
@@ -199,35 +216,35 @@ func parseReviewResponse(response string) (*ReviewResult, error) {
 // parseNaturalLanguageReview extracts review info from a natural language response.
 func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 	lower := strings.ToLower(response)
-	
+
 	result := &ReviewResult{
-		Score:   70, // Default score
-		Issues:  []Issue{},
-		Praise:  []string{},
+		Score:  70, // Default score
+		Issues: []Issue{},
+		Praise: []string{},
 	}
-	
+
 	// Determine pass/fail
 	// Look for explicit pass indicators
-	if strings.Contains(lower, "lgtm") || 
-	   strings.Contains(lower, "looks good") ||
-	   strings.Contains(lower, "approved") ||
-	   strings.Contains(lower, "ready to merge") ||
-	   strings.Contains(lower, "no critical issues") && !strings.Contains(lower, "major issues") {
+	if strings.Contains(lower, "lgtm") ||
+		strings.Contains(lower, "looks good") ||
+		strings.Contains(lower, "approved") ||
+		strings.Contains(lower, "ready to merge") ||
+		strings.Contains(lower, "no critical issues") && !strings.Contains(lower, "major issues") {
 		result.Passed = true
 		result.Score = 85
 	}
-	
+
 	// Look for explicit fail indicators
 	if strings.Contains(lower, "must be addressed") ||
-	   strings.Contains(lower, "blocking") ||
-	   strings.Contains(lower, "critical issue") ||
-	   strings.Contains(lower, "cannot be merged") ||
-	   strings.Contains(lower, "needs work") ||
-	   strings.Contains(lower, "issues that need to be addressed") {
+		strings.Contains(lower, "blocking") ||
+		strings.Contains(lower, "critical issue") ||
+		strings.Contains(lower, "cannot be merged") ||
+		strings.Contains(lower, "needs work") ||
+		strings.Contains(lower, "issues that need to be addressed") {
 		result.Passed = false
 		result.Score = 50
 	}
-	
+
 	// Extract summary - first paragraph or first 300 chars
 	lines := strings.Split(response, "\n")
 	var summaryBuilder strings.Builder
@@ -249,13 +266,13 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 	if len(result.Summary) > 300 {
 		result.Summary = result.Summary[:300] + "..."
 	}
-	
+
 	// Extract issues by looking for common patterns
 	issuePatterns := []string{
 		"issue", "problem", "bug", "error", "fix", "should", "must", "need to",
 		"incorrect", "missing", "wrong", "critical", "major", "minor",
 	}
-	
+
 	for _, line := range lines {
 		lineLower := strings.ToLower(line)
 		for _, pattern := range issuePatterns {
@@ -265,7 +282,7 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 				line = strings.TrimPrefix(line, "- ")
 				line = strings.TrimPrefix(line, "* ")
 				line = strings.TrimPrefix(line, "• ")
-				
+
 				if len(line) > 20 && len(line) < 500 && !strings.HasPrefix(line, "#") {
 					severity := "minor"
 					if strings.Contains(lineLower, "critical") {
@@ -273,7 +290,7 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 					} else if strings.Contains(lineLower, "major") || strings.Contains(lineLower, "must") {
 						severity = "major"
 					}
-					
+
 					result.Issues = append(result.Issues, Issue{
 						Severity:    severity,
 						Description: line,
@@ -283,7 +300,7 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 			}
 		}
 	}
-	
+
 	// Deduplicate and limit issues
 	seen := make(map[string]bool)
 	var uniqueIssues []Issue
@@ -295,7 +312,7 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 		}
 	}
 	result.Issues = uniqueIssues
-	
+
 	// Count critical/major issues to determine pass/fail
 	criticalCount := 0
 	majorCount := 0
@@ -306,7 +323,7 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 			majorCount++
 		}
 	}
-	
+
 	if criticalCount > 0 || majorCount > 2 {
 		result.Passed = false
 		result.Score = 40 + (10 - criticalCount*10 - majorCount*5)
@@ -314,16 +331,16 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 			result.Score = 20
 		}
 	}
-	
+
 	// Extract guidance - look for "fix" or "recommendation" sections
 	var guidanceBuilder strings.Builder
 	inGuidance := false
 	for _, line := range lines {
 		lineLower := strings.ToLower(line)
-		if strings.Contains(lineLower, "recommend") || 
-		   strings.Contains(lineLower, "suggestion") ||
-		   strings.Contains(lineLower, "to fix") ||
-		   strings.Contains(lineLower, "next step") {
+		if strings.Contains(lineLower, "recommend") ||
+			strings.Contains(lineLower, "suggestion") ||
+			strings.Contains(lineLower, "to fix") ||
+			strings.Contains(lineLower, "next step") {
 			inGuidance = true
 		}
 		if inGuidance {
@@ -335,7 +352,7 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 		}
 	}
 	result.Guidance = strings.TrimSpace(guidanceBuilder.String())
-	
+
 	// If no guidance extracted, use the issues as guidance
 	if result.Guidance == "" && len(result.Issues) > 0 {
 		var issueGuidance strings.Builder
@@ -348,7 +365,7 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 		}
 		result.Guidance = issueGuidance.String()
 	}
-	
+
 	return result, nil
 }
 
