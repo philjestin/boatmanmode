@@ -1,7 +1,7 @@
 .ai/
 
 # Binaries
-boatman
+/boatman
 *.exe
 *.dll
 *.so
