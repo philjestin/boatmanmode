@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/philjestin/boatmanmode/internal/claude"
+	"github.com/philjestin/boatmanmode/internal/config"
 	"github.com/philjestin/boatmanmode/internal/linear"
 )
 
@@ -45,9 +46,12 @@ type Planner struct {
 }
 
 // New creates a new Planner agent.
-func New(worktreePath string) *Planner {
+func New(worktreePath string, cfg *config.Config) *Planner {
+	client := claude.NewWithTmux(worktreePath, "planner")
+	client.Model = cfg.Claude.Models.Planner
+	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
 	return &Planner{
-		client:       claude.NewWithTmux(worktreePath, "planner"),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }

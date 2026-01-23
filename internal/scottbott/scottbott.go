@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/philjestin/boatmanmode/internal/config"
 )
 
 // ReviewResult represents the outcome of a code review.
@@ -34,50 +36,60 @@ type Issue struct {
 
 // ScottBott invokes the review skill.
 type ScottBott struct {
-	workDir     string
-	sessionName string
-	outputDir   string
-	skill       string
+	workDir             string
+	sessionName         string
+	outputDir           string
+	skill               string
+	model               string
+	enablePromptCaching bool
 }
 
 // New creates a new ScottBott instance.
-func New() *ScottBott {
+func New(cfg *config.Config) *ScottBott {
 	return &ScottBott{
-		sessionName: "reviewer",
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       "peer-review",
+		sessionName:         "reviewer",
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               cfg.ReviewSkill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
 // NewForIteration creates a ScottBott for a specific review iteration.
-func NewForIteration(iteration int) *ScottBott {
+func NewForIteration(iteration int, cfg *config.Config) *ScottBott {
 	return &ScottBott{
-		sessionName: fmt.Sprintf("reviewer-%d", iteration),
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       "peer-review",
+		sessionName:         fmt.Sprintf("reviewer-%d", iteration),
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               cfg.ReviewSkill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
 // NewWithWorkDir creates a ScottBott that runs in a specific directory.
-func NewWithWorkDir(workDir string, iteration int) *ScottBott {
+func NewWithWorkDir(workDir string, iteration int, cfg *config.Config) *ScottBott {
 	return &ScottBott{
-		workDir:     workDir,
-		sessionName: fmt.Sprintf("reviewer-%d", iteration),
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       "peer-review",
+		workDir:             workDir,
+		sessionName:         fmt.Sprintf("reviewer-%d", iteration),
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               cfg.ReviewSkill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
 // NewWithSkill creates a ScottBott with a specific skill/agent for review.
-func NewWithSkill(workDir string, iteration int, skill string) *ScottBott {
+func NewWithSkill(workDir string, iteration int, skill string, cfg *config.Config) *ScottBott {
 	if skill == "" {
 		skill = "peer-review"
 	}
 	return &ScottBott{
-		workDir:     workDir,
-		sessionName: fmt.Sprintf("reviewer-%d", iteration),
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       skill,
+		workDir:             workDir,
+		sessionName:         fmt.Sprintf("reviewer-%d", iteration),
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               skill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
@@ -103,11 +115,23 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 
 	// Invoke Claude with the configured review agent/skill
 	// The skill should exist in the repo's .claude/ directory
-	cmd := exec.CommandContext(ctx, "claude",
+	args := []string{
 		"-p",
 		"--agent", s.skill,
 		"--output-format", "text",
-	)
+	}
+
+	// Add model if specified
+	if s.model != "" {
+		args = append(args, "--model", s.model)
+	}
+
+	// Add prompt caching if enabled
+	if s.enablePromptCaching {
+		args = append(args, "--cache-system-prompt")
+	}
+
+	cmd := exec.CommandContext(ctx, "claude", args...)
 
 	// Pipe the prompt via stdin
 	promptContent, _ := os.ReadFile(promptFile)

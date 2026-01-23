@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/philjestin/boatmanmode/internal/claude"
+	"github.com/philjestin/boatmanmode/internal/config"
 	"github.com/philjestin/boatmanmode/internal/handoff"
 	"github.com/philjestin/boatmanmode/internal/linear"
 	"github.com/philjestin/boatmanmode/internal/planner"
@@ -32,18 +33,24 @@ type ExecutionResult struct {
 }
 
 // New creates a new Executor.
-func New(worktreePath string) *Executor {
+func New(worktreePath string, cfg *config.Config) *Executor {
+	client := claude.NewWithTmux(worktreePath, "executor")
+	client.Model = cfg.Claude.Models.Executor
+	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
 	return &Executor{
-		client:       claude.NewWithTmux(worktreePath, "executor"),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }
 
 // NewRefactorExecutor creates an executor for a refactor iteration.
-func NewRefactorExecutor(worktreePath string, iteration int) *Executor {
+func NewRefactorExecutor(worktreePath string, iteration int, cfg *config.Config) *Executor {
 	sessionName := fmt.Sprintf("refactor-%d", iteration)
+	client := claude.NewWithTmux(worktreePath, sessionName)
+	client.Model = cfg.Claude.Models.Refactor
+	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
 	return &Executor{
-		client:       claude.NewWithTmux(worktreePath, sessionName),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }

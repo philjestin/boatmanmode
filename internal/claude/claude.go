@@ -43,6 +43,12 @@ type Client struct {
 
 	// Debug enables debug output
 	Debug bool
+
+	// Model specifies which Claude model to use (e.g., "claude-sonnet-4.5", "claude-haiku-4")
+	Model string
+
+	// EnablePromptCaching enables prompt caching to reduce costs
+	EnablePromptCaching bool
 }
 
 // StreamChunk represents a chunk from Claude's stream-json output.
@@ -126,7 +132,11 @@ func (c *Client) messageTmux(ctx context.Context, systemPrompt, userPrompt strin
 	// Don't kill session on completion - let user inspect if needed
 	// defer c.TmuxManager.KillSession(sess)
 
-	return c.TmuxManager.RunClaudeStreaming(ctx, sess, systemPrompt, userPrompt)
+	opts := tmux.ClaudeOptions{
+		Model:               c.Model,
+		EnablePromptCaching: c.EnablePromptCaching,
+	}
+	return c.TmuxManager.RunClaudeStreamingWithOptions(ctx, sess, systemPrompt, userPrompt, opts)
 }
 
 // messageStreaming sends a message and streams the response with retry support.
@@ -159,6 +169,16 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 		"-p",
 		"--output-format", "stream-json",
 		"--tools", "", // Disable tools for clean text output
+	}
+
+	// Add model selection if specified
+	if c.Model != "" {
+		args = append(args, "--model", c.Model)
+	}
+
+	// Add prompt caching flag if enabled
+	if c.EnablePromptCaching {
+		args = append(args, "--cache-system-prompt")
 	}
 
 	if systemPrompt != "" {
@@ -298,6 +318,16 @@ func (c *Client) messageNonStreaming(ctx context.Context, systemPrompt, userProm
 		"--output-format", "text",
 	}
 
+	// Add model selection if specified
+	if c.Model != "" {
+		args = append(args, "--model", c.Model)
+	}
+
+	// Add prompt caching flag if enabled
+	if c.EnablePromptCaching {
+		args = append(args, "--cache-system-prompt")
+	}
+
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)
 	}
@@ -336,6 +366,16 @@ func (c *Client) MessageWithFiles(ctx context.Context, systemPrompt, userPrompt 
 	args := []string{
 		"-p",
 		"--output-format", "text",
+	}
+
+	// Add model selection if specified
+	if c.Model != "" {
+		args = append(args, "--model", c.Model)
+	}
+
+	// Add prompt caching flag if enabled
+	if c.EnablePromptCaching {
+		args = append(args, "--cache-system-prompt")
 	}
 
 	if systemPrompt != "" {

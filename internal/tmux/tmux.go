@@ -148,7 +148,17 @@ parse_claude_output() {
 // RunClaudeStreaming runs Claude with live output in the tmux session.
 // The output streams directly to the terminal for live viewing.
 // When complete, the output is captured via tmux capture-pane.
+// ClaudeOptions holds options for Claude CLI invocation.
+type ClaudeOptions struct {
+	Model               string
+	EnablePromptCaching bool
+}
+
 func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemPrompt, userPrompt string) (string, error) {
+	return m.RunClaudeStreamingWithOptions(ctx, sess, systemPrompt, userPrompt, ClaudeOptions{})
+}
+
+func (m *Manager) RunClaudeStreamingWithOptions(ctx context.Context, sess *Session, systemPrompt, userPrompt string, opts ClaudeOptions) (string, error) {
 	// Write prompt to file (avoids command line length limits)
 	promptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-prompt.txt", sess.Name))
 	if err := os.WriteFile(promptFile, []byte(userPrompt), 0644); err != nil {
@@ -162,14 +172,23 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 
 	// Create runner script
 	scriptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-run.sh", sess.Name))
-	
+
+	// Build Claude CLI flags
+	claudeFlags := "-p --dangerously-skip-permissions --verbose --output-format stream-json"
+	if opts.Model != "" {
+		claudeFlags += fmt.Sprintf(" --model %s", opts.Model)
+	}
+	if opts.EnablePromptCaching {
+		claudeFlags += " --cache-system-prompt"
+	}
+
 	var script string
 	if systemPrompt != "" {
 		sysFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-system.txt", sess.Name))
 		if err := os.WriteFile(sysFile, []byte(systemPrompt), 0644); err != nil {
 			return "", fmt.Errorf("failed to write system prompt file: %w", err)
 		}
-		
+
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
 echo '🤖 Claude is working (with file write permissions)...'
@@ -186,7 +205,7 @@ SYSTEM_PROMPT="$(cat '%s')"
 USER_PROMPT="$(cat '%s')"
 
 # Run Claude with stream-json and parse output
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
+claude %s --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -200,7 +219,7 @@ touch '%s'
 
 # Cleanup (leave result file for parsing)
 rm -f '%s' '%s' '%s'
-`, resultFile, parseScript, sysFile, promptFile, sess.DoneFile, promptFile, sysFile, scriptFile)
+`, resultFile, parseScript, sysFile, promptFile, claudeFlags, sess.DoneFile, promptFile, sysFile, scriptFile)
 	} else {
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
@@ -217,7 +236,7 @@ export RESULT_FILE='%s'
 USER_PROMPT="$(cat '%s')"
 
 # Run Claude with stream-json and parse output
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json "$USER_PROMPT" 2>&1 | parse_claude_output
+claude %s "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -231,7 +250,7 @@ touch '%s'
 
 # Cleanup (leave result file for parsing)
 rm -f '%s' '%s'
-`, resultFile, parseScript, promptFile, sess.DoneFile, promptFile, scriptFile)
+`, resultFile, parseScript, promptFile, claudeFlags, sess.DoneFile, promptFile, scriptFile)
 	}
 
 	if err := os.WriteFile(scriptFile, []byte(script), 0755); err != nil {
