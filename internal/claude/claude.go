@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/philjestin/boatmanmode/internal/cost"
 	"github.com/philjestin/boatmanmode/internal/retry"
 	"github.com/philjestin/boatmanmode/internal/tmux"
 )
@@ -61,6 +62,14 @@ type StreamChunk struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	} `json:"message"`
+	// Usage data (present in "result" type chunks)
+	Usage struct {
+		InputTokens      int `json:"input_tokens"`
+		OutputTokens     int `json:"output_tokens"`
+		CacheReadTokens  int `json:"cache_read_input_tokens"`
+		CacheWriteTokens int `json:"cache_creation_input_tokens"`
+	} `json:"usage"`
+	TotalCostUSD float64 `json:"total_cost_usd"`
 }
 
 // New creates a new Claude CLI client.
@@ -100,8 +109,8 @@ func NewWithTmux(workDir, sessionName string) *Client {
 	}
 }
 
-// Message sends a message to Claude and returns the response.
-func (c *Client) Message(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+// Message sends a message to Claude and returns the response with usage data.
+func (c *Client) Message(ctx context.Context, systemPrompt, userPrompt string) (string, *cost.Usage, error) {
 	// Use tmux for large prompts or when explicitly enabled
 	if c.UseTmux || len(userPrompt) > 100000 || len(systemPrompt) > 50000 {
 		return c.messageTmux(ctx, systemPrompt, userPrompt)
@@ -114,7 +123,7 @@ func (c *Client) Message(ctx context.Context, systemPrompt, userPrompt string) (
 }
 
 // messageTmux sends a message using tmux session.
-func (c *Client) messageTmux(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+func (c *Client) messageTmux(ctx context.Context, systemPrompt, userPrompt string) (string, *cost.Usage, error) {
 	if c.TmuxManager == nil {
 		c.TmuxManager = tmux.NewManager("boatman")
 	}
@@ -126,7 +135,7 @@ func (c *Client) messageTmux(ctx context.Context, systemPrompt, userPrompt strin
 
 	sess, err := c.TmuxManager.CreateSession(sessionName, c.WorkDir)
 	if err != nil {
-		return "", fmt.Errorf("failed to create tmux session: %w", err)
+		return "", nil, fmt.Errorf("failed to create tmux session: %w", err)
 	}
 
 	// Don't kill session on completion - let user inspect if needed
@@ -140,11 +149,12 @@ func (c *Client) messageTmux(ctx context.Context, systemPrompt, userPrompt strin
 }
 
 // messageStreaming sends a message and streams the response with retry support.
-func (c *Client) messageStreaming(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+func (c *Client) messageStreaming(ctx context.Context, systemPrompt, userPrompt string) (string, *cost.Usage, error) {
 	var fullResponse string
+	var usage *cost.Usage
 
 	err := retry.Do(ctx, retry.CLIConfig(), "Claude CLI", func() error {
-		result, err := c.doStreamingRequest(ctx, systemPrompt, userPrompt)
+		result, resultUsage, err := c.doStreamingRequest(ctx, systemPrompt, userPrompt)
 		if err != nil {
 			// Check for retryable error patterns
 			errStr := err.Error()
@@ -157,14 +167,22 @@ func (c *Client) messageStreaming(ctx context.Context, systemPrompt, userPrompt 
 			return retry.Permanent(err)
 		}
 		fullResponse = result
+		usage = resultUsage
 		return nil
 	})
 
-	return fullResponse, err
+	return fullResponse, usage, err
+}
+
+// streamResult holds the response and usage from streaming.
+type streamResult struct {
+	response string
+	usage    *cost.Usage
+	err      error
 }
 
 // doStreamingRequest performs a single streaming request to Claude.
-func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPrompt string) (string, *cost.Usage, error) {
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
@@ -200,32 +218,34 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return "", fmt.Errorf("failed to get stdout pipe: %w", err)
+		return "", nil, fmt.Errorf("failed to get stdout pipe: %w", err)
 	}
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("failed to start claude: %w", err)
+		return "", nil, fmt.Errorf("failed to start claude: %w", err)
 	}
 
 	// Stream and collect the response
 	var fullResponse strings.Builder
+	var resultUsage *cost.Usage
 
 	fmt.Println("   ┌─────────────────────────────────────────────────────────────")
 
 	// Create a done channel to signal when reading is complete
-	readDone := make(chan error, 1)
+	readDone := make(chan streamResult, 1)
 
 	go func() {
 		lineBuffer := ""
+		var usage *cost.Usage
 		reader := bufio.NewReader(stdout)
 		for {
 			// Check for context cancellation between reads
 			select {
 			case <-ctx.Done():
-				readDone <- ctx.Err()
+				readDone <- streamResult{err: ctx.Err()}
 				return
 			default:
 			}
@@ -237,10 +257,10 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 					if lineBuffer != "" {
 						fmt.Printf("   │ %s\n", lineBuffer)
 					}
-					readDone <- nil
+					readDone <- streamResult{response: fullResponse.String(), usage: usage}
 					return
 				}
-				readDone <- fmt.Errorf("error reading stream: %w", err)
+				readDone <- streamResult{err: fmt.Errorf("error reading stream: %w", err)}
 				return
 			}
 
@@ -265,6 +285,14 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 			case "message_stop":
 				continue
 			case "result":
+				// Extract usage data from result chunk
+				usage = &cost.Usage{
+					InputTokens:      chunk.Usage.InputTokens,
+					OutputTokens:     chunk.Usage.OutputTokens,
+					CacheReadTokens:  chunk.Usage.CacheReadTokens,
+					CacheWriteTokens: chunk.Usage.CacheWriteTokens,
+					TotalCostUSD:     chunk.TotalCostUSD,
+				}
 				for _, content := range chunk.Message.Content {
 					if content.Type == "text" {
 						text = content.Text
@@ -294,25 +322,33 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 	case <-ctx.Done():
 		// Context cancelled - process will be killed by CommandContext
 		<-readDone // Wait for reader goroutine to finish
-		return "", ctx.Err()
-	case err := <-readDone:
-		if err != nil {
-			return "", err
+		return "", nil, ctx.Err()
+	case result := <-readDone:
+		if result.err != nil {
+			return "", nil, result.err
 		}
+		resultUsage = result.usage
 	}
 
 	if err := cmd.Wait(); err != nil {
-		return "", fmt.Errorf("claude command failed: %w\nstderr: %s", err, stderr.String())
+		return "", nil, fmt.Errorf("claude command failed: %w\nstderr: %s", err, stderr.String())
 	}
 
 	fmt.Println("   └─────────────────────────────────────────────────────────────")
 	fmt.Printf("   📄 Total: %d chars\n", fullResponse.Len())
 
-	return fullResponse.String(), nil
+	// Display usage if available
+	if resultUsage != nil && !resultUsage.IsEmpty() {
+		fmt.Printf("   💰 Cost: $%.4f (in: %d, out: %d, cache: %d)\n",
+			resultUsage.TotalCostUSD, resultUsage.InputTokens, resultUsage.OutputTokens, resultUsage.CacheReadTokens)
+	}
+
+	return fullResponse.String(), resultUsage, nil
 }
 
 // messageNonStreaming sends a message without streaming.
-func (c *Client) messageNonStreaming(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+// Note: Non-streaming text output doesn't include usage data.
+func (c *Client) messageNonStreaming(ctx context.Context, systemPrompt, userPrompt string) (string, *cost.Usage, error) {
 	args := []string{
 		"-p",
 		"--output-format", "text",
@@ -355,14 +391,16 @@ func (c *Client) messageNonStreaming(ctx context.Context, systemPrompt, userProm
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("claude command failed: %w\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String()[:min(500, stdout.Len())])
+		return "", nil, fmt.Errorf("claude command failed: %w\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String()[:min(500, stdout.Len())])
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	// Non-streaming text output doesn't include usage data
+	return strings.TrimSpace(stdout.String()), nil, nil
 }
 
 // MessageWithFiles sends a message with file context to Claude.
-func (c *Client) MessageWithFiles(ctx context.Context, systemPrompt, userPrompt string, files []string) (string, error) {
+// Note: This uses text output format, so usage data is not available.
+func (c *Client) MessageWithFiles(ctx context.Context, systemPrompt, userPrompt string, files []string) (string, *cost.Usage, error) {
 	args := []string{
 		"-p",
 		"--output-format", "text",
@@ -404,10 +442,11 @@ func (c *Client) MessageWithFiles(ctx context.Context, systemPrompt, userPrompt 
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("claude command failed: %w\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String()[:min(500, stdout.Len())])
+		return "", nil, fmt.Errorf("claude command failed: %w\nstderr: %s\nstdout: %s", err, stderr.String(), stdout.String()[:min(500, stdout.Len())])
 	}
 
-	return strings.TrimSpace(stdout.String()), nil
+	// Text output format doesn't include usage data
+	return strings.TrimSpace(stdout.String()), nil, nil
 }
 
 func min(a, b int) int {

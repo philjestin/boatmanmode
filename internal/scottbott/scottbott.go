@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/philjestin/boatmanmode/internal/config"
+	"github.com/philjestin/boatmanmode/internal/cost"
 )
 
 // ReviewResult represents the outcome of a code review.
@@ -94,14 +95,15 @@ func NewWithSkill(workDir string, iteration int, skill string, cfg *config.Confi
 }
 
 // Review performs a code review using the peer-review Claude skill.
-func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*ReviewResult, error) {
+// Note: Usage data is not available when using the skill/agent mode as it uses text output.
+func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*ReviewResult, *cost.Usage, error) {
 	os.MkdirAll(s.outputDir, 0755)
 
 	// Write the review prompt to a file
 	promptFile := filepath.Join(s.outputDir, fmt.Sprintf("%s-prompt.txt", s.sessionName))
 	prompt := formatReviewPrompt(ticketContext, diff)
 	if err := os.WriteFile(promptFile, []byte(prompt), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write prompt: %w", err)
+		return nil, nil, fmt.Errorf("failed to write prompt: %w", err)
 	}
 	defer os.Remove(promptFile)
 
@@ -157,11 +159,13 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 
 	// Parse the response
 	response := strings.TrimSpace(string(output))
-	return parseReviewResponse(response)
+	result, err := parseReviewResponse(response)
+	// Text output format doesn't include usage data
+	return result, nil, err
 }
 
 // reviewWithFallback uses a system prompt if peer-review skill isn't available.
-func (s *ScottBott) reviewWithFallback(ctx context.Context, ticketContext, diff string) (*ReviewResult, error) {
+func (s *ScottBott) reviewWithFallback(ctx context.Context, ticketContext, diff string) (*ReviewResult, *cost.Usage, error) {
 	systemPrompt := `You are a senior staff engineer conducting a peer code review.
 Be thorough, constructive, and focused on correctness, security, and maintainability.
 
@@ -204,12 +208,14 @@ Pass if: no critical issues, ≤2 major issues, code meets requirements.`
 	elapsed := time.Since(start)
 
 	if err != nil {
-		return nil, fmt.Errorf("review failed: %w\nOutput: %s", err, string(output))
+		return nil, nil, fmt.Errorf("review failed: %w\nOutput: %s", err, string(output))
 	}
 
 	fmt.Printf("   ⏱️  Review completed in %s\n", elapsed.Round(time.Second))
 
-	return parseReviewResponse(strings.TrimSpace(string(output)))
+	result, err := parseReviewResponse(strings.TrimSpace(string(output)))
+	// Text output format doesn't include usage data
+	return result, nil, err
 }
 
 // formatReviewPrompt creates the prompt for code review.

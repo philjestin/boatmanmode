@@ -14,6 +14,7 @@ import (
 	"github.com/philjestin/boatmanmode/internal/config"
 	"github.com/philjestin/boatmanmode/internal/contextpin"
 	"github.com/philjestin/boatmanmode/internal/coordinator"
+	"github.com/philjestin/boatmanmode/internal/cost"
 	"github.com/philjestin/boatmanmode/internal/diffverify"
 	"github.com/philjestin/boatmanmode/internal/executor"
 	"github.com/philjestin/boatmanmode/internal/github"
@@ -56,6 +57,7 @@ type workContext struct {
 	reviewResult *scottbott.ReviewResult
 	iterations   int
 	startTime    time.Time
+	costTracker  *cost.Tracker
 }
 
 // New creates a new Agent.
@@ -70,7 +72,10 @@ func New(cfg *config.Config) (*Agent, error) {
 // Work executes the complete workflow for a ticket.
 // Orchestrates 9 steps: fetch → worktree → plan → validate → execute → test → review → commit → PR
 func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) {
-	wc := &workContext{startTime: time.Now()}
+	wc := &workContext{
+		startTime:   time.Now(),
+		costTracker: cost.NewTracker(),
+	}
 
 	// Start the coordinator
 	a.coordinator.Start(ctx)
@@ -202,12 +207,15 @@ func (a *Agent) stepPlanning(ctx context.Context, wc *workContext) error {
 	go func() {
 		defer wg.Done()
 		planAgent := planner.New(wc.worktree.Path, a.config)
-		plan, err := planAgent.Analyze(ctx, wc.ticket)
+		plan, usage, err := planAgent.Analyze(ctx, wc.ticket)
 		if err != nil {
 			fmt.Printf("   ⚠️  Planning failed: %v (continuing without plan)\n", err)
 			return
 		}
 		wc.plan = plan
+		if usage != nil {
+			wc.costTracker.Add("Planning", *usage)
+		}
 	}()
 
 	wg.Wait()
@@ -262,9 +270,13 @@ func (a *Agent) stepExecute(ctx context.Context, wc *workContext) error {
 	printStep(5, 9, "Executing development task")
 
 	wc.exec = executor.New(wc.worktree.Path, a.config)
-	result, err := wc.exec.ExecuteWithPlan(ctx, wc.ticket, wc.plan)
+	result, usage, err := wc.exec.ExecuteWithPlan(ctx, wc.ticket, wc.plan)
 	if err != nil {
 		return fmt.Errorf("execution failed: %w", err)
+	}
+
+	if usage != nil {
+		wc.costTracker.Add("Execution", *usage)
 	}
 
 	if !result.Success {
@@ -309,7 +321,11 @@ func (a *Agent) stepTestAndReview(ctx context.Context, wc *workContext) error {
 		defer wg.Done()
 		reviewHandoff := handoff.NewReviewHandoff(wc.ticket, initialDiff, wc.execResult.FilesChanged)
 		reviewer := scottbott.NewWithSkill(wc.worktree.Path, 1, a.config.ReviewSkill, a.config)
-		wc.reviewResult, _ = reviewer.Review(ctx, reviewHandoff.Concise(), initialDiff)
+		reviewResult, usage, _ := reviewer.Review(ctx, reviewHandoff.Concise(), initialDiff)
+		wc.reviewResult = reviewResult
+		if usage != nil {
+			wc.costTracker.Add("Review #1", *usage)
+		}
 	}()
 
 	wg.Wait()
@@ -392,9 +408,13 @@ func (a *Agent) doReview(ctx context.Context, wc *workContext, previousDiff *str
 
 	reviewHandoff := handoff.NewReviewHandoff(wc.ticket, diff, wc.execResult.FilesChanged)
 	reviewer := scottbott.NewWithSkill(wc.worktree.Path, wc.iterations, a.config.ReviewSkill, a.config)
-	reviewResult, err := reviewer.Review(ctx, reviewHandoff.ForTokenBudget(handoff.DefaultBudget.Context), diff)
+	reviewResult, usage, err := reviewer.Review(ctx, reviewHandoff.ForTokenBudget(handoff.DefaultBudget.Context), diff)
 	if err != nil {
 		return fmt.Errorf("review failed: %w", err)
+	}
+
+	if usage != nil {
+		wc.costTracker.Add(fmt.Sprintf("Review #%d", wc.iterations), *usage)
 	}
 
 	fmt.Println(reviewResult.FormatReview())
@@ -423,9 +443,13 @@ func (a *Agent) doRefactor(ctx context.Context, wc *workContext, previousDiff st
 		projectRules,
 	)
 
-	refactorResult, err := refactorExec.RefactorWithHandoff(ctx, refactorHandoff)
+	refactorResult, usage, err := refactorExec.RefactorWithHandoff(ctx, refactorHandoff)
 	if err != nil {
 		return fmt.Errorf("refactor failed: %w", err)
+	}
+
+	if usage != nil {
+		wc.costTracker.Add(fmt.Sprintf("Refactor #%d", wc.iterations), *usage)
 	}
 
 	// Verify the diff addresses the issues
@@ -538,16 +562,22 @@ func (a *Agent) printWorkflowSummary(wc *workContext, prURL string) {
 	totalElapsed := time.Since(wc.startTime)
 
 	fmt.Println()
-	fmt.Println("═══════════════════════════════════════════════════════")
+	fmt.Println("═══════════════════════════════════════════════════════════════════════")
 	fmt.Println("✅ WORKFLOW COMPLETE")
-	fmt.Println("═══════════════════════════════════════════════════════")
+	fmt.Println("═══════════════════════════════════════════════════════════════════════")
 	fmt.Printf("   🎫 Ticket:     %s\n", wc.ticket.Identifier)
 	fmt.Printf("   🌿 Branch:     %s\n", wc.branchName)
 	fmt.Printf("   🔄 Iterations: %d\n", wc.iterations)
 	fmt.Printf("   🧪 Tests:      %s\n", formatTestStatus(wc.testResult))
 	fmt.Printf("   ⏱️  Total time: %s\n", totalElapsed.Round(time.Second))
 	fmt.Printf("   🔗 PR:         %s\n", prURL)
-	fmt.Println("═══════════════════════════════════════════════════════")
+
+	// Display cost summary if any usage was tracked
+	if wc.costTracker.HasUsage() {
+		fmt.Print(wc.costTracker.Summary())
+	}
+
+	fmt.Println("═══════════════════════════════════════════════════════════════════════")
 }
 
 // formatTestStatus formats test result for display.
