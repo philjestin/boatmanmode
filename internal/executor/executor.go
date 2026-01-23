@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/philjestin/boatmanmode/internal/claude"
+	"github.com/philjestin/boatmanmode/internal/config"
+	"github.com/philjestin/boatmanmode/internal/cost"
 	"github.com/philjestin/boatmanmode/internal/handoff"
 	"github.com/philjestin/boatmanmode/internal/linear"
 	"github.com/philjestin/boatmanmode/internal/planner"
@@ -32,30 +34,36 @@ type ExecutionResult struct {
 }
 
 // New creates a new Executor.
-func New(worktreePath string) *Executor {
+func New(worktreePath string, cfg *config.Config) *Executor {
+	client := claude.NewWithTmux(worktreePath, "executor")
+	client.Model = cfg.Claude.Models.Executor
+	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
 	return &Executor{
-		client:       claude.NewWithTmux(worktreePath, "executor"),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }
 
 // NewRefactorExecutor creates an executor for a refactor iteration.
-func NewRefactorExecutor(worktreePath string, iteration int) *Executor {
+func NewRefactorExecutor(worktreePath string, iteration int, cfg *config.Config) *Executor {
 	sessionName := fmt.Sprintf("refactor-%d", iteration)
+	client := claude.NewWithTmux(worktreePath, sessionName)
+	client.Model = cfg.Claude.Models.Refactor
+	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
 	return &Executor{
-		client:       claude.NewWithTmux(worktreePath, sessionName),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }
 
 // Execute performs the development task described in the ticket.
-func (e *Executor) Execute(ctx context.Context, ticket *linear.Ticket) (*ExecutionResult, error) {
+func (e *Executor) Execute(ctx context.Context, ticket *linear.Ticket) (*ExecutionResult, *cost.Usage, error) {
 	// Use planning agent to analyze the ticket first
 	return e.ExecuteWithPlan(ctx, ticket, nil)
 }
 
 // ExecuteWithPlan performs execution with an optional pre-computed plan.
-func (e *Executor) ExecuteWithPlan(ctx context.Context, ticket *linear.Ticket, plan *planner.Plan) (*ExecutionResult, error) {
+func (e *Executor) ExecuteWithPlan(ctx context.Context, ticket *linear.Ticket, plan *planner.Plan) (*ExecutionResult, *cost.Usage, error) {
 	// Build prompt with ticket
 	fmt.Println("   📖 Building execution prompt...")
 	prompt := e.buildPrompt(ticket)
@@ -84,13 +92,13 @@ If implementation already exists, add tests or make improvements as needed.`
 	// Phase 3: Execute with Claude
 	fmt.Println("   🤖 Phase 3: Executing with Claude...")
 	fmt.Printf("   📝 Prompt size: %d chars\n", len(prompt))
-	
+
 	start := time.Now()
-	response, err := e.client.Message(ctx, systemPrompt, prompt)
+	response, usage, err := e.client.Message(ctx, systemPrompt, prompt)
 	elapsed := time.Since(start)
-	
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to call Claude: %w", err)
+		return nil, nil, fmt.Errorf("failed to call Claude: %w", err)
 	}
 
 	fmt.Printf("   ⏱️  Claude responded in %s\n", elapsed.Round(time.Second))
@@ -100,7 +108,7 @@ If implementation already exists, add tests or make improvements as needed.`
 	fmt.Println("   📦 Detecting file changes in worktree...")
 	filesChanged, err := e.detectChangedFiles()
 	if err != nil {
-		return nil, fmt.Errorf("failed to detect changes: %w", err)
+		return nil, usage, fmt.Errorf("failed to detect changes: %w", err)
 	}
 
 	if len(filesChanged) == 0 {
@@ -117,7 +125,7 @@ If implementation already exists, add tests or make improvements as needed.`
 		return &ExecutionResult{
 			Success: false,
 			Error:   fmt.Errorf("claude did not produce any file changes - check response above"),
-		}, nil
+		}, usage, nil
 	}
 
 	fmt.Printf("   ✏️  Claude modified %d files:\n", len(filesChanged))
@@ -129,7 +137,7 @@ If implementation already exists, add tests or make improvements as needed.`
 		Success:      true,
 		FilesChanged: filesChanged,
 		Summary:      extractSummary(response),
-	}, nil
+	}, usage, nil
 }
 
 // detectChangedFiles uses git status to find what files Claude modified.
@@ -176,11 +184,11 @@ func (e *Executor) detectChangedFiles() ([]string, error) {
 }
 
 // Refactor applies feedback from ScottBott to improve the code.
-func (e *Executor) Refactor(ctx context.Context, ticket *linear.Ticket, reviewFeedback string, changedFiles []string) (*ExecutionResult, error) {
+func (e *Executor) Refactor(ctx context.Context, ticket *linear.Ticket, reviewFeedback string, changedFiles []string) (*ExecutionResult, *cost.Usage, error) {
 	fmt.Println("   📖 Reading changed files...")
 	currentFiles, err := e.GetSpecificFiles(changedFiles)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read current files: %w", err)
+		return nil, nil, fmt.Errorf("failed to read current files: %w", err)
 	}
 	fmt.Printf("   📁 Loaded %d changed files\n", len(changedFiles))
 
@@ -193,8 +201,8 @@ func (e *Executor) Refactor(ctx context.Context, ticket *linear.Ticket, reviewFe
 ## Review Feedback (MUST ADDRESS)
 %s
 
-Please refactor the code to address all the feedback. Provide complete updated files.`, 
-		e.buildPrompt(ticket), 
+Please refactor the code to address all the feedback. Provide complete updated files.`,
+		e.buildPrompt(ticket),
 		currentFiles,
 		reviewFeedback)
 
@@ -213,11 +221,11 @@ Format your response with complete file contents:
 	fmt.Printf("   📝 Prompt size: %d chars\n", len(prompt))
 
 	start := time.Now()
-	response, err := e.client.Message(ctx, systemPrompt, prompt)
+	response, usage, err := e.client.Message(ctx, systemPrompt, prompt)
 	elapsed := time.Since(start)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to call Claude: %w", err)
+		return nil, nil, fmt.Errorf("failed to call Claude: %w", err)
 	}
 
 	fmt.Printf("   ⏱️  Claude responded in %s\n", elapsed.Round(time.Second))
@@ -228,7 +236,7 @@ Format your response with complete file contents:
 		return &ExecutionResult{
 			Success: false,
 			Error:   err,
-		}, nil
+		}, usage, nil
 	}
 
 	fmt.Printf("   ✏️  Updated %d files\n", len(filesChanged))
@@ -240,11 +248,11 @@ Format your response with complete file contents:
 		Success:      true,
 		FilesChanged: filesChanged,
 		Summary:      "Refactored based on review feedback",
-	}, nil
+	}, usage, nil
 }
 
 // RefactorWithHandoff uses a structured handoff for refactoring.
-func (e *Executor) RefactorWithHandoff(ctx context.Context, h *handoff.RefactorHandoff) (*ExecutionResult, error) {
+func (e *Executor) RefactorWithHandoff(ctx context.Context, h *handoff.RefactorHandoff) (*ExecutionResult, *cost.Usage, error) {
 	prompt := h.ToPrompt()
 
 	// Build system prompt - emphasize following project rules
@@ -270,18 +278,18 @@ Common mistakes to avoid:
 	fmt.Println("   🤖 Sending refactor request...")
 
 	start := time.Now()
-	response, err := e.client.Message(ctx, systemPrompt, prompt)
+	response, usage, err := e.client.Message(ctx, systemPrompt, prompt)
 	elapsed := time.Since(start)
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to call Claude: %w", err)
+		return nil, nil, fmt.Errorf("failed to call Claude: %w", err)
 	}
 
 	fmt.Printf("   ⏱️  Completed in %s\n", elapsed.Round(time.Second))
 
 	filesChanged, err := e.parseAndApplyChanges(response)
 	if err != nil {
-		return &ExecutionResult{Success: false, Error: err}, nil
+		return &ExecutionResult{Success: false, Error: err}, usage, nil
 	}
 
 	fmt.Printf("   ✏️  Updated %d files\n", len(filesChanged))
@@ -293,7 +301,7 @@ Common mistakes to avoid:
 		Success:      true,
 		FilesChanged: filesChanged,
 		Summary:      "Refactored based on review feedback",
-	}, nil
+	}, usage, nil
 }
 
 // GetSpecificFiles reads specific files from the worktree (exported for handoff).

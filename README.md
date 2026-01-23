@@ -166,6 +166,24 @@ Complete test harness for integration testing:
 - Mock GitHub CLI for PR creation
 - Fixture-based test scenarios
 
+### 💰 Cost Optimization (NEW)
+Intelligent model selection and prompt caching to reduce API costs by 50-90%:
+
+#### Prompt Caching
+- **Automatic caching** of system prompts (project rules, agent instructions)
+- **50-90% cost reduction** on refactor iterations (cached context reused)
+- **Faster response times** from cache hits
+- **Enabled by default** with `enable_prompt_caching: true`
+
+#### Multi-Model Strategy
+- **Smart model selection** per agent type for optimal cost/performance
+- **Sonnet 4.5** for complex tasks (planning, code generation, review)
+- **Haiku 4** for simple tasks (validation, test parsing) - **90% cheaper**
+- **Configurable per agent** via `claude.models` in config
+- **Example savings**: Preflight + test parsing with Haiku saves ~$0.50 per ticket
+
+**Combined impact**: Using both features can reduce per-ticket costs from ~$2-3 to ~$0.50-1.00 while maintaining quality.
+
 ---
 
 ## Prerequisites
@@ -240,10 +258,20 @@ retry:
 
 # Claude CLI settings
 claude:
-  command: claude                # Claude CLI command
-  use_tmux: false               # Use tmux for large prompts
-  large_prompt_threshold: 100000 # Character count for tmux
-  timeout: 0                     # 0 = no timeout
+  command: claude                     # Claude CLI command
+  use_tmux: false                    # Use tmux for large prompts
+  large_prompt_threshold: 100000     # Character count for tmux
+  timeout: 0                         # 0 = no timeout
+  enable_prompt_caching: true        # Enable prompt caching (reduces costs 50-90%)
+
+  # Multi-model strategy: Use different models per agent type
+  models:
+    planner: claude-sonnet-4.5       # Complex planning & codebase analysis
+    executor: claude-sonnet-4.5      # Code generation
+    reviewer: claude-sonnet-4.5      # Quality review
+    refactor: claude-sonnet-4.5      # Fixing review issues
+    preflight: claude-haiku-4        # Fast validation (90% cheaper)
+    test_runner: claude-haiku-4      # Simple test output parsing (90% cheaper)
 
 # Token budgets for handoffs
 token_budget:

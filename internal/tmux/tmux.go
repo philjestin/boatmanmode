@@ -5,12 +5,16 @@ package tmux
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/philjestin/boatmanmode/internal/cost"
 )
 
 // Session represents a tmux session running a Claude agent.
@@ -148,11 +152,21 @@ parse_claude_output() {
 // RunClaudeStreaming runs Claude with live output in the tmux session.
 // The output streams directly to the terminal for live viewing.
 // When complete, the output is captured via tmux capture-pane.
-func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemPrompt, userPrompt string) (string, error) {
+// ClaudeOptions holds options for Claude CLI invocation.
+type ClaudeOptions struct {
+	Model               string
+	EnablePromptCaching bool
+}
+
+func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemPrompt, userPrompt string) (string, *cost.Usage, error) {
+	return m.RunClaudeStreamingWithOptions(ctx, sess, systemPrompt, userPrompt, ClaudeOptions{})
+}
+
+func (m *Manager) RunClaudeStreamingWithOptions(ctx context.Context, sess *Session, systemPrompt, userPrompt string, opts ClaudeOptions) (string, *cost.Usage, error) {
 	// Write prompt to file (avoids command line length limits)
 	promptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-prompt.txt", sess.Name))
 	if err := os.WriteFile(promptFile, []byte(userPrompt), 0644); err != nil {
-		return "", fmt.Errorf("failed to write prompt file: %w", err)
+		return "", nil, fmt.Errorf("failed to write prompt file: %w", err)
 	}
 	// Don't delete prompt file until after completion - tmux needs it
 	
@@ -162,14 +176,23 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 
 	// Create runner script
 	scriptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-run.sh", sess.Name))
-	
+
+	// Build Claude CLI flags
+	claudeFlags := "-p --dangerously-skip-permissions --verbose --output-format stream-json"
+	if opts.Model != "" {
+		claudeFlags += fmt.Sprintf(" --model %s", opts.Model)
+	}
+	if opts.EnablePromptCaching {
+		claudeFlags += " --cache-system-prompt"
+	}
+
 	var script string
 	if systemPrompt != "" {
 		sysFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-system.txt", sess.Name))
 		if err := os.WriteFile(sysFile, []byte(systemPrompt), 0644); err != nil {
-			return "", fmt.Errorf("failed to write system prompt file: %w", err)
+			return "", nil, fmt.Errorf("failed to write system prompt file: %w", err)
 		}
-		
+
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
 echo '🤖 Claude is working (with file write permissions)...'
@@ -186,7 +209,7 @@ SYSTEM_PROMPT="$(cat '%s')"
 USER_PROMPT="$(cat '%s')"
 
 # Run Claude with stream-json and parse output
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
+claude %s --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -200,7 +223,7 @@ touch '%s'
 
 # Cleanup (leave result file for parsing)
 rm -f '%s' '%s' '%s'
-`, resultFile, parseScript, sysFile, promptFile, sess.DoneFile, promptFile, sysFile, scriptFile)
+`, resultFile, parseScript, sysFile, promptFile, claudeFlags, sess.DoneFile, promptFile, sysFile, scriptFile)
 	} else {
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
@@ -217,7 +240,7 @@ export RESULT_FILE='%s'
 USER_PROMPT="$(cat '%s')"
 
 # Run Claude with stream-json and parse output
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json "$USER_PROMPT" 2>&1 | parse_claude_output
+claude %s "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -231,11 +254,11 @@ touch '%s'
 
 # Cleanup (leave result file for parsing)
 rm -f '%s' '%s'
-`, resultFile, parseScript, promptFile, sess.DoneFile, promptFile, scriptFile)
+`, resultFile, parseScript, promptFile, claudeFlags, sess.DoneFile, promptFile, scriptFile)
 	}
 
 	if err := os.WriteFile(scriptFile, []byte(script), 0755); err != nil {
-		return "", fmt.Errorf("failed to write script: %w", err)
+		return "", nil, fmt.Errorf("failed to write script: %w", err)
 	}
 	// Script cleans itself up after running
 
@@ -245,12 +268,12 @@ rm -f '%s' '%s'
 	// Run the script in tmux
 	m.sendKeys(sess.Name, scriptFile)
 
-	// Wait for completion
+	// Wait for completion and get usage
 	return m.waitAndCapture(ctx, sess)
 }
 
 // waitAndCapture waits for Claude to finish and captures the output.
-func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, error) {
+func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, *cost.Usage, error) {
 	fmt.Println("   ┌─────────────────────────────────────────────────────────────")
 	fmt.Printf("   │ 📺 Session: %s\n", sess.Name)
 	fmt.Println("   │ 💡 Watch live: boatman watch")
@@ -271,9 +294,9 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", nil, ctx.Err()
 		case <-timeout:
-			return "", fmt.Errorf("timeout waiting for Claude response")
+			return "", nil, fmt.Errorf("timeout waiting for Claude response")
 		case <-ticker.C:
 			// Check if done
 			if _, err := os.Stat(sess.DoneFile); err == nil {
@@ -283,19 +306,28 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 				// Capture the pane content
 				output, err := m.capturePane(sess, 5000) // Capture last 5000 lines
 				if err != nil {
-					return "", fmt.Errorf("failed to capture output: %w", err)
+					return "", nil, fmt.Errorf("failed to capture output: %w", err)
 				}
 				
 				// Save for debugging
 				os.WriteFile(sess.OutputFile, []byte(output), 0644)
 				
-				// Try to extract actual result from the result file (has full response)
+				// Try to extract actual result and usage from the result file
 				if resultContent, err := os.ReadFile(resultFile); err == nil && len(resultContent) > 0 {
 					defer os.Remove(resultFile) // Clean up after reading
-					return extractResultFromJSON(string(resultContent)), nil
+					resultText := extractResultFromJSON(string(resultContent))
+					usage := parseResultUsage(string(resultContent))
+
+					// Display usage if available
+					if usage != nil && !usage.IsEmpty() {
+						fmt.Printf("   💰 Cost: $%.4f (in: %d, out: %d, cache: %d)\n",
+							usage.TotalCostUSD, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens)
+					}
+
+					return resultText, usage, nil
 				}
 				
-				return extractClaudeOutput(output), nil
+				return extractClaudeOutput(output), nil, nil
 			}
 			
 			// Print progress dots
@@ -305,6 +337,98 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, er
 			}
 		}
 	}
+}
+
+// parseResultUsage extracts usage data from the result JSON line.
+func parseResultUsage(jsonLine string) *cost.Usage {
+	// Try to parse as JSON first
+	var result struct {
+		Usage struct {
+			InputTokens      int `json:"input_tokens"`
+			OutputTokens     int `json:"output_tokens"`
+			CacheReadTokens  int `json:"cache_read_input_tokens"`
+			CacheWriteTokens int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+		TotalCostUSD float64 `json:"total_cost_usd"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonLine), &result); err == nil {
+		return &cost.Usage{
+			InputTokens:      result.Usage.InputTokens,
+			OutputTokens:     result.Usage.OutputTokens,
+			CacheReadTokens:  result.Usage.CacheReadTokens,
+			CacheWriteTokens: result.Usage.CacheWriteTokens,
+			TotalCostUSD:     result.TotalCostUSD,
+		}
+	}
+
+	// Fallback: extract using string parsing (for malformed JSON)
+	usage := &cost.Usage{}
+
+	// Extract total_cost_usd
+	if idx := strings.Index(jsonLine, `"total_cost_usd":`); idx != -1 {
+		start := idx + len(`"total_cost_usd":`)
+		end := start
+		for end < len(jsonLine) && (jsonLine[end] == '.' || (jsonLine[end] >= '0' && jsonLine[end] <= '9')) {
+			end++
+		}
+		if val, err := strconv.ParseFloat(jsonLine[start:end], 64); err == nil {
+			usage.TotalCostUSD = val
+		}
+	}
+
+	// Extract input_tokens
+	if idx := strings.Index(jsonLine, `"input_tokens":`); idx != -1 {
+		start := idx + len(`"input_tokens":`)
+		end := start
+		for end < len(jsonLine) && jsonLine[end] >= '0' && jsonLine[end] <= '9' {
+			end++
+		}
+		if val, err := strconv.Atoi(jsonLine[start:end]); err == nil {
+			usage.InputTokens = val
+		}
+	}
+
+	// Extract output_tokens
+	if idx := strings.Index(jsonLine, `"output_tokens":`); idx != -1 {
+		start := idx + len(`"output_tokens":`)
+		end := start
+		for end < len(jsonLine) && jsonLine[end] >= '0' && jsonLine[end] <= '9' {
+			end++
+		}
+		if val, err := strconv.Atoi(jsonLine[start:end]); err == nil {
+			usage.OutputTokens = val
+		}
+	}
+
+	// Extract cache_read_input_tokens
+	if idx := strings.Index(jsonLine, `"cache_read_input_tokens":`); idx != -1 {
+		start := idx + len(`"cache_read_input_tokens":`)
+		end := start
+		for end < len(jsonLine) && jsonLine[end] >= '0' && jsonLine[end] <= '9' {
+			end++
+		}
+		if val, err := strconv.Atoi(jsonLine[start:end]); err == nil {
+			usage.CacheReadTokens = val
+		}
+	}
+
+	// Extract cache_creation_input_tokens
+	if idx := strings.Index(jsonLine, `"cache_creation_input_tokens":`); idx != -1 {
+		start := idx + len(`"cache_creation_input_tokens":`)
+		end := start
+		for end < len(jsonLine) && jsonLine[end] >= '0' && jsonLine[end] <= '9' {
+			end++
+		}
+		if val, err := strconv.Atoi(jsonLine[start:end]); err == nil {
+			usage.CacheWriteTokens = val
+		}
+	}
+
+	if usage.IsEmpty() {
+		return nil
+	}
+	return usage
 }
 
 // extractResultFromJSON extracts Claude's text result from the stream-json result line.
@@ -396,7 +520,7 @@ func extractClaudeOutput(paneContent string) string {
 }
 
 // RunClaude runs Claude in the session with the given prompt via stdin.
-func (m *Manager) RunClaude(ctx context.Context, sess *Session, systemPrompt, userPrompt string) (string, error) {
+func (m *Manager) RunClaude(ctx context.Context, sess *Session, systemPrompt, userPrompt string) (string, *cost.Usage, error) {
 	return m.RunClaudeStreaming(ctx, sess, systemPrompt, userPrompt)
 }
 

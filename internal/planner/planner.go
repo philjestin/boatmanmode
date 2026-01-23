@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/philjestin/boatmanmode/internal/claude"
+	"github.com/philjestin/boatmanmode/internal/config"
+	"github.com/philjestin/boatmanmode/internal/cost"
 	"github.com/philjestin/boatmanmode/internal/linear"
 )
 
@@ -45,15 +47,18 @@ type Planner struct {
 }
 
 // New creates a new Planner agent.
-func New(worktreePath string) *Planner {
+func New(worktreePath string, cfg *config.Config) *Planner {
+	client := claude.NewWithTmux(worktreePath, "planner")
+	client.Model = cfg.Claude.Models.Planner
+	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
 	return &Planner{
-		client:       claude.NewWithTmux(worktreePath, "planner"),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }
 
 // Analyze runs the planning agent to understand the ticket.
-func (p *Planner) Analyze(ctx context.Context, ticket *linear.Ticket) (*Plan, error) {
+func (p *Planner) Analyze(ctx context.Context, ticket *linear.Ticket) (*Plan, *cost.Usage, error) {
 	fmt.Println("   🧠 Running planning agent...")
 
 	systemPrompt := `You are a senior software architect planning a development task.
@@ -111,11 +116,11 @@ Focus on understanding existing patterns before proposing new code.`,
 	fmt.Println("   📝 Analyzing ticket and exploring codebase...")
 
 	start := time.Now()
-	response, err := p.client.Message(ctx, systemPrompt, prompt)
+	response, usage, err := p.client.Message(ctx, systemPrompt, prompt)
 	elapsed := time.Since(start)
 
 	if err != nil {
-		return nil, fmt.Errorf("planning agent failed: %w", err)
+		return nil, nil, fmt.Errorf("planning agent failed: %w", err)
 	}
 
 	fmt.Printf("   ⏱️  Planning completed in %s\n", elapsed.Round(time.Second))
@@ -128,7 +133,7 @@ Focus on understanding existing patterns before proposing new code.`,
 		return &Plan{
 			Summary:  "Planning agent explored codebase",
 			Approach: []string{"See planning agent output for details"},
-		}, nil
+		}, usage, nil
 	}
 
 	// Display plan summary
@@ -138,7 +143,7 @@ Focus on understanding existing patterns before proposing new code.`,
 		fmt.Printf("   📝 Approach: %d steps\n", len(plan.Approach))
 	}
 
-	return plan, nil
+	return plan, usage, nil
 }
 
 // parsePlan extracts the JSON plan from Claude's response.

@@ -11,6 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/philjestin/boatmanmode/internal/config"
+	"github.com/philjestin/boatmanmode/internal/cost"
 )
 
 // ReviewResult represents the outcome of a code review.
@@ -34,62 +37,73 @@ type Issue struct {
 
 // ScottBott invokes the review skill.
 type ScottBott struct {
-	workDir     string
-	sessionName string
-	outputDir   string
-	skill       string
+	workDir             string
+	sessionName         string
+	outputDir           string
+	skill               string
+	model               string
+	enablePromptCaching bool
 }
 
 // New creates a new ScottBott instance.
-func New() *ScottBott {
+func New(cfg *config.Config) *ScottBott {
 	return &ScottBott{
-		sessionName: "reviewer",
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       "peer-review",
+		sessionName:         "reviewer",
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               cfg.ReviewSkill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
 // NewForIteration creates a ScottBott for a specific review iteration.
-func NewForIteration(iteration int) *ScottBott {
+func NewForIteration(iteration int, cfg *config.Config) *ScottBott {
 	return &ScottBott{
-		sessionName: fmt.Sprintf("reviewer-%d", iteration),
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       "peer-review",
+		sessionName:         fmt.Sprintf("reviewer-%d", iteration),
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               cfg.ReviewSkill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
 // NewWithWorkDir creates a ScottBott that runs in a specific directory.
-func NewWithWorkDir(workDir string, iteration int) *ScottBott {
+func NewWithWorkDir(workDir string, iteration int, cfg *config.Config) *ScottBott {
 	return &ScottBott{
-		workDir:     workDir,
-		sessionName: fmt.Sprintf("reviewer-%d", iteration),
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       "peer-review",
+		workDir:             workDir,
+		sessionName:         fmt.Sprintf("reviewer-%d", iteration),
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               cfg.ReviewSkill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
 // NewWithSkill creates a ScottBott with a specific skill/agent for review.
-func NewWithSkill(workDir string, iteration int, skill string) *ScottBott {
+func NewWithSkill(workDir string, iteration int, skill string, cfg *config.Config) *ScottBott {
 	if skill == "" {
 		skill = "peer-review"
 	}
 	return &ScottBott{
-		workDir:     workDir,
-		sessionName: fmt.Sprintf("reviewer-%d", iteration),
-		outputDir:   filepath.Join(os.TempDir(), "boatman-sessions"),
-		skill:       skill,
+		workDir:             workDir,
+		sessionName:         fmt.Sprintf("reviewer-%d", iteration),
+		outputDir:           filepath.Join(os.TempDir(), "boatman-sessions"),
+		skill:               skill,
+		model:               cfg.Claude.Models.Reviewer,
+		enablePromptCaching: cfg.Claude.EnablePromptCaching,
 	}
 }
 
 // Review performs a code review using the peer-review Claude skill.
-func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*ReviewResult, error) {
+// Note: Usage data is not available when using the skill/agent mode as it uses text output.
+func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*ReviewResult, *cost.Usage, error) {
 	os.MkdirAll(s.outputDir, 0755)
 
 	// Write the review prompt to a file
 	promptFile := filepath.Join(s.outputDir, fmt.Sprintf("%s-prompt.txt", s.sessionName))
 	prompt := formatReviewPrompt(ticketContext, diff)
 	if err := os.WriteFile(promptFile, []byte(prompt), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write prompt: %w", err)
+		return nil, nil, fmt.Errorf("failed to write prompt: %w", err)
 	}
 	defer os.Remove(promptFile)
 
@@ -103,11 +117,23 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 
 	// Invoke Claude with the configured review agent/skill
 	// The skill should exist in the repo's .claude/ directory
-	cmd := exec.CommandContext(ctx, "claude",
+	args := []string{
 		"-p",
 		"--agent", s.skill,
 		"--output-format", "text",
-	)
+	}
+
+	// Add model if specified
+	if s.model != "" {
+		args = append(args, "--model", s.model)
+	}
+
+	// Add prompt caching if enabled
+	if s.enablePromptCaching {
+		args = append(args, "--cache-system-prompt")
+	}
+
+	cmd := exec.CommandContext(ctx, "claude", args...)
 
 	// Pipe the prompt via stdin
 	promptContent, _ := os.ReadFile(promptFile)
@@ -133,11 +159,13 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 
 	// Parse the response
 	response := strings.TrimSpace(string(output))
-	return parseReviewResponse(response)
+	result, err := parseReviewResponse(response)
+	// Text output format doesn't include usage data
+	return result, nil, err
 }
 
 // reviewWithFallback uses a system prompt if peer-review skill isn't available.
-func (s *ScottBott) reviewWithFallback(ctx context.Context, ticketContext, diff string) (*ReviewResult, error) {
+func (s *ScottBott) reviewWithFallback(ctx context.Context, ticketContext, diff string) (*ReviewResult, *cost.Usage, error) {
 	systemPrompt := `You are a senior staff engineer conducting a peer code review.
 Be thorough, constructive, and focused on correctness, security, and maintainability.
 
@@ -180,12 +208,14 @@ Pass if: no critical issues, ≤2 major issues, code meets requirements.`
 	elapsed := time.Since(start)
 
 	if err != nil {
-		return nil, fmt.Errorf("review failed: %w\nOutput: %s", err, string(output))
+		return nil, nil, fmt.Errorf("review failed: %w\nOutput: %s", err, string(output))
 	}
 
 	fmt.Printf("   ⏱️  Review completed in %s\n", elapsed.Round(time.Second))
 
-	return parseReviewResponse(strings.TrimSpace(string(output)))
+	result, err := parseReviewResponse(strings.TrimSpace(string(output)))
+	// Text output format doesn't include usage data
+	return result, nil, err
 }
 
 // formatReviewPrompt creates the prompt for code review.
