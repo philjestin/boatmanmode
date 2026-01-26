@@ -91,11 +91,37 @@ func (m *Manager) CreateSession(name, workDir string) (*Session, error) {
 // parseScript is the shell code that parses Claude's stream-json output.
 // It's shared between the with-system-prompt and without-system-prompt versions.
 // RESULT_FILE env var should be set before calling to save the result content.
+// RAW_OUTPUT_FILE env var should be set to save raw output for debugging.
 const parseScript = `
 # Parse JSON to show activity and token usage
 parse_claude_output() {
     while IFS= read -r line; do
-        if echo "$line" | grep -q '"type":"assistant"'; then
+        # Save all lines to raw output file for debugging
+        if [ -n "$RAW_OUTPUT_FILE" ]; then
+            echo "$line" >> "$RAW_OUTPUT_FILE"
+        fi
+
+        # Check for result type (handles "type":"result" or "type": "result")
+        if echo "$line" | grep -qE '"type"\s*:\s*"result"'; then
+            echo ""
+            echo "📊 Task completed!"
+            # Save the result line for later parsing (contains full response)
+            if [ -n "$RESULT_FILE" ]; then
+                echo "$line" > "$RESULT_FILE"
+            fi
+            # Extract and display token usage
+            cost=$(echo "$line" | sed -n 's/.*"total_cost_usd":\([0-9.]*\).*/\1/p')
+            input=$(echo "$line" | grep -oE '"input_tokens"\s*:\s*[0-9]+' | head -1 | grep -oE '[0-9]+')
+            output=$(echo "$line" | grep -oE '"output_tokens"\s*:\s*[0-9]+' | head -1 | grep -oE '[0-9]+')
+            cache=$(echo "$line" | grep -oE '"cache_read_input_tokens"\s*:\s*[0-9]+' | head -1 | grep -oE '[0-9]+')
+            if [ -n "$cost" ]; then
+                printf "💰 Cost: \$%.4f\n" "$cost"
+            fi
+            if [ -n "$input" ] || [ -n "$output" ]; then
+                echo "📈 Tokens: ${input:-0} in / ${output:-0} out / ${cache:-0} cached"
+            fi
+        # Check for assistant messages with tool use
+        elif echo "$line" | grep -qE '"type"\s*:\s*"assistant"'; then
             if echo "$line" | grep -q '"name":"Bash"'; then
                 cmd=$(echo "$line" | sed -n 's/.*"command":"\([^"]*\)".*/\1/p' | head -1)
                 if [ -n "$cmd" ]; then
@@ -120,30 +146,15 @@ parse_claude_output() {
                 echo "🔍 Searching files..."
             elif echo "$line" | grep -q '"name":"Grep"'; then
                 echo "🔍 Searching content..."
-            elif echo "$line" | grep -q '"type":"text"' && ! echo "$line" | grep -q '"tool_use"'; then
+            elif echo "$line" | grep -qE '"type"\s*:\s*"text"' && ! echo "$line" | grep -q '"tool_use"'; then
                 text=$(echo "$line" | sed -n 's/.*"text":"\([^"]*\)".*/\1/p' | head -1 | head -c 200)
                 if [ -n "$text" ]; then
                     echo "💭 $text"
                 fi
             fi
-        elif echo "$line" | grep -q '"type":"result"'; then
-            echo ""
-            echo "📊 Task completed!"
-            # Save the result line for later parsing (contains full response)
-            if [ -n "$RESULT_FILE" ]; then
-                echo "$line" > "$RESULT_FILE"
-            fi
-            # Extract and display token usage
-            cost=$(echo "$line" | sed -n 's/.*"total_cost_usd":\([0-9.]*\).*/\1/p')
-            input=$(echo "$line" | grep -o '"input_tokens":[0-9]*' | head -1 | sed 's/"input_tokens"://')
-            output=$(echo "$line" | grep -o '"output_tokens":[0-9]*' | head -1 | sed 's/"output_tokens"://')
-            cache=$(echo "$line" | grep -o '"cache_read_input_tokens":[0-9]*' | head -1 | sed 's/"cache_read_input_tokens"://')
-            if [ -n "$cost" ]; then
-                printf "💰 Cost: \$%.4f\n" "$cost"
-            fi
-            if [ -n "$input" ] || [ -n "$output" ]; then
-                echo "📈 Tokens: ${input:-0} in / ${output:-0} out / ${cache:-0} cached"
-            fi
+        # Capture error messages
+        elif echo "$line" | grep -qiE '(error|failed|exception|invalid)'; then
+            echo "⚠️  $line"
         fi
     done
 }
@@ -186,6 +197,10 @@ func (m *Manager) RunClaudeStreamingWithOptions(ctx context.Context, sess *Sessi
 		claudeFlags += " --cache-system-prompt"
 	}
 
+	// Raw output file for debugging when result parsing fails
+	rawOutputFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-raw.txt", sess.Name))
+	os.Remove(rawOutputFile) // Clear any old output
+
 	var script string
 	if systemPrompt != "" {
 		sysFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-system.txt", sess.Name))
@@ -199,14 +214,25 @@ echo '🤖 Claude is working (with file write permissions)...'
 echo '📝 Activity will stream below:'
 echo ''
 
-# Set result file path for parse_claude_output to save result
+# Set file paths for parse_claude_output
 export RESULT_FILE='%s'
+export RAW_OUTPUT_FILE='%s'
+
+# Clear raw output file
+> "$RAW_OUTPUT_FILE"
 
 %s
 
 # Read into variables
 SYSTEM_PROMPT="$(cat '%s')"
 USER_PROMPT="$(cat '%s')"
+
+# Check if claude CLI exists
+if ! command -v claude &> /dev/null; then
+    echo '❌ Error: claude CLI not found in PATH'
+    touch '%s'
+    exit 1
+fi
 
 # Run Claude with stream-json and parse output
 claude %s --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
@@ -221,9 +247,9 @@ else
 fi
 touch '%s'
 
-# Cleanup (leave result file for parsing)
+# Cleanup (leave result and raw files for parsing)
 rm -f '%s' '%s' '%s'
-`, resultFile, parseScript, sysFile, promptFile, claudeFlags, sess.DoneFile, promptFile, sysFile, scriptFile)
+`, resultFile, rawOutputFile, parseScript, sysFile, promptFile, sess.DoneFile, claudeFlags, sess.DoneFile, promptFile, sysFile, scriptFile)
 	} else {
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
@@ -231,13 +257,24 @@ echo '🤖 Claude is working (with file write permissions)...'
 echo '📝 Activity will stream below:'
 echo ''
 
-# Set result file path for parse_claude_output to save result
+# Set file paths for parse_claude_output
 export RESULT_FILE='%s'
+export RAW_OUTPUT_FILE='%s'
+
+# Clear raw output file
+> "$RAW_OUTPUT_FILE"
 
 %s
 
 # Read into variable
 USER_PROMPT="$(cat '%s')"
+
+# Check if claude CLI exists
+if ! command -v claude &> /dev/null; then
+    echo '❌ Error: claude CLI not found in PATH'
+    touch '%s'
+    exit 1
+fi
 
 # Run Claude with stream-json and parse output
 claude %s "$USER_PROMPT" 2>&1 | parse_claude_output
@@ -252,9 +289,9 @@ else
 fi
 touch '%s'
 
-# Cleanup (leave result file for parsing)
+# Cleanup (leave result and raw files for parsing)
 rm -f '%s' '%s'
-`, resultFile, parseScript, promptFile, claudeFlags, sess.DoneFile, promptFile, scriptFile)
+`, resultFile, rawOutputFile, parseScript, promptFile, sess.DoneFile, claudeFlags, sess.DoneFile, promptFile, scriptFile)
 	}
 
 	if err := os.WriteFile(scriptFile, []byte(script), 0755); err != nil {
@@ -290,6 +327,7 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, *c
 	
 	// Result file where the stream-json result is saved
 	resultFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-result.json", sess.Name))
+	rawOutputFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-raw.txt", sess.Name))
 
 	for {
 		select {
@@ -302,16 +340,16 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, *c
 			if _, err := os.Stat(sess.DoneFile); err == nil {
 				elapsed := time.Since(startTime)
 				fmt.Printf("\n   ⏱️  Completed in %s\n", elapsed.Round(time.Second))
-				
+
 				// Capture the pane content
 				output, err := m.capturePane(sess, 5000) // Capture last 5000 lines
 				if err != nil {
 					return "", nil, fmt.Errorf("failed to capture output: %w", err)
 				}
-				
+
 				// Save for debugging
 				os.WriteFile(sess.OutputFile, []byte(output), 0644)
-				
+
 				// Try to extract actual result and usage from the result file
 				if resultContent, err := os.ReadFile(resultFile); err == nil && len(resultContent) > 0 {
 					defer os.Remove(resultFile) // Clean up after reading
@@ -324,12 +362,35 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, *c
 							usage.TotalCostUSD, usage.InputTokens, usage.OutputTokens, usage.CacheReadTokens)
 					}
 
+					// Clean up raw file on success
+					os.Remove(rawOutputFile)
 					return resultText, usage, nil
 				}
-				
-				return extractClaudeOutput(output), nil, nil
+
+				// Result file missing or empty - try raw output file for debugging
+				if rawContent, err := os.ReadFile(rawOutputFile); err == nil && len(rawContent) > 0 {
+					// Try to extract result from raw stream-json lines
+					resultText := extractResultFromRawOutput(string(rawContent))
+					if resultText != "" {
+						os.Remove(rawOutputFile)
+						return resultText, nil, nil
+					}
+					// Log that we have raw output but couldn't parse it
+					if os.Getenv("BOATMAN_DEBUG") == "1" {
+						fmt.Printf("   ⚠️  Raw output available (%d bytes) but no result found\n", len(rawContent))
+						fmt.Printf("   📁 Debug file: %s\n", rawOutputFile)
+					}
+				}
+
+				// Final fallback: extract from pane content
+				fallbackResult := extractClaudeOutput(output)
+				if fallbackResult == "" && os.Getenv("BOATMAN_DEBUG") == "1" {
+					fmt.Println("   ⚠️  No result could be extracted from Claude's output")
+					fmt.Printf("   📁 Check pane output: %s\n", sess.OutputFile)
+				}
+				return fallbackResult, nil, nil
 			}
-			
+
 			// Print progress dots
 			if time.Since(lastDot) >= 5*time.Second {
 				fmt.Print(".")
@@ -337,6 +398,25 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, *c
 			}
 		}
 	}
+}
+
+// extractResultFromRawOutput tries to find a result from raw stream-json lines.
+func extractResultFromRawOutput(rawContent string) string {
+	lines := strings.Split(rawContent, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// Look for result type lines
+		if strings.Contains(line, `"type"`) && strings.Contains(line, `"result"`) {
+			result := extractResultFromJSON(line)
+			if result != "" {
+				return result
+			}
+		}
+	}
+	return ""
 }
 
 // parseResultUsage extracts usage data from the result JSON line.
@@ -433,19 +513,75 @@ func parseResultUsage(jsonLine string) *cost.Usage {
 
 // extractResultFromJSON extracts Claude's text result from the stream-json result line.
 func extractResultFromJSON(jsonLine string) string {
-	// The result line contains: {"type":"result","result":"actual content here",...}
-	// Extract the "result" field
-	
-	// Find "result":" and extract the value
+	// The result line contains: {"type":"result","message":{"content":[{"type":"text","text":"..."}]},...}
+	// We need to extract the text from message.content[].text
+
+	// Try parsing as JSON first (most reliable)
+	var result struct {
+		Type    string `json:"type"`
+		Result  string `json:"result"` // Some versions use this simple format
+		Message struct {
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+
+	if err := json.Unmarshal([]byte(jsonLine), &result); err == nil {
+		// Check for simple "result" field first (some CLI versions)
+		if result.Result != "" {
+			return result.Result
+		}
+
+		// Extract from message.content array
+		var sb strings.Builder
+		for _, content := range result.Message.Content {
+			if content.Type == "text" && content.Text != "" {
+				sb.WriteString(content.Text)
+			}
+		}
+		if sb.Len() > 0 {
+			return sb.String()
+		}
+	}
+
+	// Fallback: try simple string extraction for "result":"..." format
 	resultKey := `"result":"`
 	startIdx := strings.Index(jsonLine, resultKey)
-	if startIdx == -1 {
-		return jsonLine // Return as-is if no result field found
+	if startIdx != -1 {
+		startIdx += len(resultKey)
+		return extractJSONString(jsonLine, startIdx)
 	}
-	
-	startIdx += len(resultKey)
-	
-	// Find the end of the string value (handle escaped quotes)
+
+	// Fallback: try to extract from "text":"..." patterns in content array
+	// Look for text fields within the content array
+	textKey := `"text":"`
+	var allText strings.Builder
+	searchPos := 0
+	for {
+		idx := strings.Index(jsonLine[searchPos:], textKey)
+		if idx == -1 {
+			break
+		}
+		startIdx := searchPos + idx + len(textKey)
+		text := extractJSONString(jsonLine, startIdx)
+		if text != "" {
+			allText.WriteString(text)
+		}
+		searchPos = startIdx + len(text) + 1
+	}
+
+	if allText.Len() > 0 {
+		return allText.String()
+	}
+
+	return "" // Return empty if nothing found
+}
+
+// extractJSONString extracts a JSON string value starting at the given position.
+// Handles escape sequences properly.
+func extractJSONString(jsonLine string, startIdx int) string {
 	var sb strings.Builder
 	escaped := false
 	for i := startIdx; i < len(jsonLine); i++ {
@@ -476,7 +612,6 @@ func extractResultFromJSON(jsonLine string) string {
 			sb.WriteByte(c)
 		}
 	}
-	
 	return sb.String()
 }
 

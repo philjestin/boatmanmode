@@ -74,28 +74,32 @@ type ClaudeConfig struct {
 	// Model configuration per agent type
 	Models ModelConfig
 
-	// EnablePromptCaching enables prompt caching for cost reduction
+	// EnablePromptCaching enables prompt caching for cost reduction.
+	// Note: Requires Claude CLI version that supports --cache-system-prompt flag.
+	// Set to true only if your CLI version supports it.
 	EnablePromptCaching bool
 }
 
 // ModelConfig holds model selection per agent type.
+// Leave empty to use the Claude CLI's default model.
+// Model names vary by provider (Anthropic API vs Vertex AI vs AWS Bedrock).
 type ModelConfig struct {
-	// Planner model for planning phase (default: claude-sonnet-4.5)
+	// Planner model for planning phase (empty = CLI default)
 	Planner string
 
-	// Executor model for code generation (default: claude-sonnet-4.5)
+	// Executor model for code generation (empty = CLI default)
 	Executor string
 
-	// Reviewer model for code review (default: claude-sonnet-4.5)
+	// Reviewer model for code review (empty = CLI default)
 	Reviewer string
 
-	// Refactor model for fixing issues (default: claude-sonnet-4.5)
+	// Refactor model for fixing issues (empty = CLI default)
 	Refactor string
 
-	// Preflight model for validation (default: claude-haiku-4)
+	// Preflight model for validation (empty = CLI default)
 	Preflight string
 
-	// TestRunner model for test output parsing (default: claude-haiku-4)
+	// TestRunner model for test output parsing (empty = CLI default)
 	TestRunner string
 }
 
@@ -137,14 +141,14 @@ func Load() (*Config, error) {
 			UseTmux:              viper.GetBool("claude.use_tmux"),
 			LargePromptThreshold: getIntOrDefault("claude.large_prompt_threshold", 100000),
 			Timeout:              getDurationOrDefault("claude.timeout", 0),
-			EnablePromptCaching:  getBoolOrDefault("claude.enable_prompt_caching", true),
+			EnablePromptCaching:  getBoolOrDefault("claude.enable_prompt_caching", false),
 			Models: ModelConfig{
-				Planner:    getStringOrDefault("claude.models.planner", "claude-sonnet-4.5"),
-				Executor:   getStringOrDefault("claude.models.executor", "claude-sonnet-4.5"),
-				Reviewer:   getStringOrDefault("claude.models.reviewer", "claude-sonnet-4.5"),
-				Refactor:   getStringOrDefault("claude.models.refactor", "claude-sonnet-4.5"),
-				Preflight:  getStringOrDefault("claude.models.preflight", "claude-haiku-4"),
-				TestRunner: getStringOrDefault("claude.models.test_runner", "claude-haiku-4"),
+				Planner:    getStringOrDefault("claude.models.planner", ""),    // Empty = use CLI default
+				Executor:   getStringOrDefault("claude.models.executor", ""),   // Empty = use CLI default
+				Reviewer:   getStringOrDefault("claude.models.reviewer", ""),   // Empty = use CLI default
+				Refactor:   getStringOrDefault("claude.models.refactor", ""),   // Empty = use CLI default
+				Preflight:  getStringOrDefault("claude.models.preflight", ""),  // Empty = use CLI default
+				TestRunner: getStringOrDefault("claude.models.test_runner", ""), // Empty = use CLI default
 			},
 		},
 
