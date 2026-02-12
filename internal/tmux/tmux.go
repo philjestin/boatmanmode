@@ -193,9 +193,7 @@ func (m *Manager) RunClaudeStreamingWithOptions(ctx context.Context, sess *Sessi
 	if opts.Model != "" {
 		claudeFlags += fmt.Sprintf(" --model %s", opts.Model)
 	}
-	if opts.EnablePromptCaching {
-		claudeFlags += " --cache-system-prompt"
-	}
+	// Note: Prompt caching happens automatically at the API level, no flag needed
 
 	// Raw output file for debugging when result parsing fails
 	rawOutputFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-raw.txt", sess.Name))
