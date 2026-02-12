@@ -50,6 +50,14 @@ type Client struct {
 
 	// EnablePromptCaching enables prompt caching to reduce costs
 	EnablePromptCaching bool
+
+	// AllowedTools are the tools this client can use.
+	// Empty/nil means all tools allowed. Use []string{} to disable all tools.
+	AllowedTools []string
+
+	// EnableTools controls whether tools are enabled at all.
+	// If false, tools are explicitly disabled with --tools "".
+	EnableTools bool
 }
 
 // StreamChunk represents a chunk from Claude's stream-json output.
@@ -106,6 +114,26 @@ func NewWithTmux(workDir, sessionName string) *Client {
 		SessionName: sessionName,
 		Stream:      true,
 		Debug:       os.Getenv("BOATMAN_DEBUG") == "1",
+		EnableTools: false, // Backward compatibility - tools disabled by default
+	}
+}
+
+// NewWithTools creates a client with specific tool permissions.
+// tools: List of allowed tools (e.g., []string{"Read", "Grep", "Glob"})
+// Pass nil to allow all tools.
+// Pass []string{} to disable all tools.
+func NewWithTools(workDir, sessionName string, tools []string) *Client {
+	return &Client{
+		Command:      "claude",
+		WorkDir:      workDir,
+		Env:          make(map[string]string),
+		UseTmux:      true,
+		TmuxManager:  tmux.NewManager("boatman"),
+		SessionName:  sessionName,
+		Stream:       true,
+		Debug:        os.Getenv("BOATMAN_DEBUG") == "1",
+		EnableTools:  true,
+		AllowedTools: tools,
 	}
 }
 
@@ -186,18 +214,25 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
-		"--tools", "", // Disable tools for clean text output
 	}
+
+	// Handle tool permissions
+	if !c.EnableTools {
+		// Explicitly disable tools for backward compatibility
+		args = append(args, "--tools", "")
+	} else if len(c.AllowedTools) > 0 {
+		// Restrict to specific tools
+		args = append(args, "--tools", strings.Join(c.AllowedTools, ","))
+	}
+	// If EnableTools is true and AllowedTools is nil, omit --tools flag entirely (allows all tools)
 
 	// Add model selection if specified
 	if c.Model != "" {
 		args = append(args, "--model", c.Model)
 	}
 
-	// Add prompt caching flag if enabled
-	if c.EnablePromptCaching {
-		args = append(args, "--cache-system-prompt")
-	}
+	// Note: Prompt caching is automatically handled by Claude CLI when using system prompts
+	// No explicit flag needed in current version (2.1.39+)
 
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)
@@ -359,10 +394,8 @@ func (c *Client) messageNonStreaming(ctx context.Context, systemPrompt, userProm
 		args = append(args, "--model", c.Model)
 	}
 
-	// Add prompt caching flag if enabled
-	if c.EnablePromptCaching {
-		args = append(args, "--cache-system-prompt")
-	}
+	// Note: Prompt caching is automatically handled by Claude CLI when using system prompts
+	// No explicit flag needed in current version (2.1.39+)
 
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)
@@ -411,10 +444,8 @@ func (c *Client) MessageWithFiles(ctx context.Context, systemPrompt, userPrompt 
 		args = append(args, "--model", c.Model)
 	}
 
-	// Add prompt caching flag if enabled
-	if c.EnablePromptCaching {
-		args = append(args, "--cache-system-prompt")
-	}
+	// Note: Prompt caching is automatically handled by Claude CLI when using system prompts
+	// No explicit flag needed in current version (2.1.39+)
 
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)

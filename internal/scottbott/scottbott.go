@@ -128,10 +128,8 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 		args = append(args, "--model", s.model)
 	}
 
-	// Add prompt caching if enabled
-	if s.enablePromptCaching {
-		args = append(args, "--cache-system-prompt")
-	}
+	// Note: Prompt caching is automatically handled by Claude CLI when using system prompts
+	// No explicit flag needed in current version (2.1.39+)
 
 	cmd := exec.CommandContext(ctx, "claude", args...)
 

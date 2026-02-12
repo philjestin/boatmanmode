@@ -48,9 +48,24 @@ type Planner struct {
 
 // New creates a new Planner agent.
 func New(worktreePath string, cfg *config.Config) *Planner {
-	client := claude.NewWithTmux(worktreePath, "planner")
-	client.Model = cfg.Claude.Models.Planner
+	var client *claude.Client
+
+	if cfg.EnableTools {
+		// Allow planner to explore codebase with Read, Grep, Glob
+		client = claude.NewWithTools(worktreePath, "planner", []string{"Read", "Grep", "Glob"})
+	} else {
+		// Backward compatibility - no tools
+		client = claude.NewWithTmux(worktreePath, "planner")
+	}
+
+	// Configure model if specified
+	if cfg.Claude.Models.Planner != "" {
+		client.Model = cfg.Claude.Models.Planner
+	}
+
+	// Note: Prompt caching is automatically handled by Claude CLI
 	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
+
 	return &Planner{
 		client:       client,
 		worktreePath: worktreePath,

@@ -35,9 +35,22 @@ type ExecutionResult struct {
 
 // New creates a new Executor.
 func New(worktreePath string, cfg *config.Config) *Executor {
-	client := claude.NewWithTmux(worktreePath, "executor")
-	client.Model = cfg.Claude.Models.Executor
+	var client *claude.Client
+
+	if cfg.EnableTools {
+		// Full toolset for development: Read, Edit, Bash, Grep, Glob
+		client = claude.NewWithTools(worktreePath, "executor", nil) // nil = allow all tools
+	} else {
+		// Backward compatibility - no tools
+		client = claude.NewWithTmux(worktreePath, "executor")
+	}
+
+	// Configure model if specified
+	if cfg.Claude.Models.Executor != "" {
+		client.Model = cfg.Claude.Models.Executor
+	}
 	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
+
 	return &Executor{
 		client:       client,
 		worktreePath: worktreePath,
@@ -47,9 +60,22 @@ func New(worktreePath string, cfg *config.Config) *Executor {
 // NewRefactorExecutor creates an executor for a refactor iteration.
 func NewRefactorExecutor(worktreePath string, iteration int, cfg *config.Config) *Executor {
 	sessionName := fmt.Sprintf("refactor-%d", iteration)
-	client := claude.NewWithTmux(worktreePath, sessionName)
-	client.Model = cfg.Claude.Models.Refactor
+	var client *claude.Client
+
+	if cfg.EnableTools {
+		// Full toolset for refactoring: Read, Edit, Bash, Grep, Glob
+		client = claude.NewWithTools(worktreePath, sessionName, nil) // nil = allow all tools
+	} else {
+		// Backward compatibility - no tools
+		client = claude.NewWithTmux(worktreePath, sessionName)
+	}
+
+	// Configure model if specified
+	if cfg.Claude.Models.Refactor != "" {
+		client.Model = cfg.Claude.Models.Refactor
+	}
 	client.EnablePromptCaching = cfg.Claude.EnablePromptCaching
+
 	return &Executor{
 		client:       client,
 		worktreePath: worktreePath,
