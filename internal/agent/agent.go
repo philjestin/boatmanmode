@@ -201,7 +201,7 @@ func (a *Agent) stepPlanning(ctx context.Context, wc *workContext) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		planAgent := planner.New(wc.worktree.Path)
+		planAgent := planner.New(wc.worktree.Path, a.config.EnableTools)
 		plan, err := planAgent.Analyze(ctx, wc.ticket)
 		if err != nil {
 			fmt.Printf("   ⚠️  Planning failed: %v (continuing without plan)\n", err)
@@ -261,7 +261,7 @@ func (a *Agent) stepPreflightValidation(ctx context.Context, wc *workContext) er
 func (a *Agent) stepExecute(ctx context.Context, wc *workContext) error {
 	printStep(5, 9, "Executing development task")
 
-	wc.exec = executor.New(wc.worktree.Path)
+	wc.exec = executor.New(wc.worktree.Path, a.config.EnableTools)
 	result, err := wc.exec.ExecuteWithPlan(ctx, wc.ticket, wc.plan)
 	if err != nil {
 		return fmt.Errorf("execution failed: %w", err)
@@ -408,7 +408,7 @@ func (a *Agent) doReview(ctx context.Context, wc *workContext, previousDiff *str
 func (a *Agent) doRefactor(ctx context.Context, wc *workContext, previousDiff string) error {
 	fmt.Printf("   🔧 Refactoring (attempt %d)...\n", wc.iterations)
 
-	refactorExec := executor.NewRefactorExecutor(wc.worktree.Path, wc.iterations)
+	refactorExec := executor.NewRefactorExecutor(wc.worktree.Path, wc.iterations, a.config.EnableTools)
 	currentCode, _ := refactorExec.GetSpecificFiles(wc.execResult.FilesChanged)
 
 	// Load project rules for proper refactoring

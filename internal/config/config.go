@@ -34,6 +34,9 @@ type Config struct {
 
 	// Debug enables verbose logging
 	Debug bool
+
+	// EnableTools enables Claude CLI tool capabilities for agents
+	EnableTools bool
 }
 
 // CoordinatorConfig holds coordinator-specific settings.
@@ -93,6 +96,7 @@ func Load() (*Config, error) {
 		AutoPR:        viper.GetBool("auto_pr"),
 		ReviewSkill:   getStringOrDefault("review_skill", "peer-review"),
 		Debug:         os.Getenv("BOATMAN_DEBUG") == "1",
+		EnableTools:   viper.GetBool("enable_tools"),
 
 		Coordinator: CoordinatorConfig{
 			MessageBufferSize:    getIntOrDefault("coordinator.message_buffer_size", 1000),

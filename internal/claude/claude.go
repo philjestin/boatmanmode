@@ -43,6 +43,14 @@ type Client struct {
 
 	// Debug enables debug output
 	Debug bool
+
+	// AllowedTools are the tools this client can use.
+	// Empty means all tools allowed. Use []string{} to disable all tools.
+	AllowedTools []string
+
+	// EnableTools controls whether tools are enabled at all.
+	// If false, tools are explicitly disabled with --tools "".
+	EnableTools bool
 }
 
 // StreamChunk represents a chunk from Claude's stream-json output.
@@ -91,6 +99,26 @@ func NewWithTmux(workDir, sessionName string) *Client {
 		SessionName: sessionName,
 		Stream:      true,
 		Debug:       os.Getenv("BOATMAN_DEBUG") == "1",
+		EnableTools: false, // Keep backward compatibility - tools disabled by default
+	}
+}
+
+// NewWithTools creates a client with specific tool permissions.
+// tools: List of allowed tools (e.g., []string{"Read", "Grep", "Glob"})
+// Pass nil to allow all tools.
+// Pass []string{} to disable all tools.
+func NewWithTools(workDir, sessionName string, tools []string) *Client {
+	return &Client{
+		Command:      "claude",
+		WorkDir:      workDir,
+		Env:          make(map[string]string),
+		UseTmux:      true,
+		TmuxManager:  tmux.NewManager("boatman"),
+		SessionName:  sessionName,
+		Stream:       true,
+		Debug:        os.Getenv("BOATMAN_DEBUG") == "1",
+		EnableTools:  true,
+		AllowedTools: tools,
 	}
 }
 
@@ -126,7 +154,7 @@ func (c *Client) messageTmux(ctx context.Context, systemPrompt, userPrompt strin
 	// Don't kill session on completion - let user inspect if needed
 	// defer c.TmuxManager.KillSession(sess)
 
-	return c.TmuxManager.RunClaudeStreaming(ctx, sess, systemPrompt, userPrompt)
+	return c.TmuxManager.RunClaudeStreaming(ctx, sess, systemPrompt, userPrompt, c.EnableTools, c.AllowedTools)
 }
 
 // messageStreaming sends a message and streams the response with retry support.
@@ -158,8 +186,17 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 	args := []string{
 		"-p",
 		"--output-format", "stream-json",
-		"--tools", "", // Disable tools for clean text output
 	}
+
+	// Handle tool permissions
+	if !c.EnableTools {
+		// Explicitly disable tools for backward compatibility
+		args = append(args, "--tools", "")
+	} else if len(c.AllowedTools) > 0 {
+		// Restrict to specific tools
+		args = append(args, "--tools", strings.Join(c.AllowedTools, ","))
+	}
+	// If EnableTools is true and AllowedTools is nil, omit --tools flag entirely (allows all tools)
 
 	if systemPrompt != "" {
 		args = append(args, "--system-prompt", systemPrompt)

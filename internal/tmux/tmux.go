@@ -148,7 +148,7 @@ parse_claude_output() {
 // RunClaudeStreaming runs Claude with live output in the tmux session.
 // The output streams directly to the terminal for live viewing.
 // When complete, the output is captured via tmux capture-pane.
-func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemPrompt, userPrompt string) (string, error) {
+func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemPrompt, userPrompt string, enableTools bool, allowedTools []string) (string, error) {
 	// Write prompt to file (avoids command line length limits)
 	promptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-prompt.txt", sess.Name))
 	if err := os.WriteFile(promptFile, []byte(userPrompt), 0644); err != nil {
@@ -160,16 +160,27 @@ func (m *Manager) RunClaudeStreaming(ctx context.Context, sess *Session, systemP
 	resultFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-result.json", sess.Name))
 	os.Remove(resultFile) // Clear any old result
 
+	// Build tool flags for Claude command
+	var toolFlags string
+	if !enableTools {
+		// Explicitly disable tools
+		toolFlags = `--tools ""`
+	} else if len(allowedTools) > 0 {
+		// Restrict to specific tools
+		toolFlags = fmt.Sprintf(`--tools "%s"`, strings.Join(allowedTools, ","))
+	}
+	// If enableTools is true and allowedTools is nil/empty, omit --tools flag (allows all tools)
+
 	// Create runner script
 	scriptFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-run.sh", sess.Name))
-	
+
 	var script string
 	if systemPrompt != "" {
 		sysFile := filepath.Join(m.outputDir, fmt.Sprintf("%s-system.txt", sess.Name))
 		if err := os.WriteFile(sysFile, []byte(systemPrompt), 0644); err != nil {
 			return "", fmt.Errorf("failed to write system prompt file: %w", err)
 		}
-		
+
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
 echo '🤖 Claude is working (with file write permissions)...'
@@ -186,7 +197,7 @@ SYSTEM_PROMPT="$(cat '%s')"
 USER_PROMPT="$(cat '%s')"
 
 # Run Claude with stream-json and parse output
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
+claude -p --dangerously-skip-permissions --verbose --output-format stream-json %s --system-prompt "$SYSTEM_PROMPT" "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -200,7 +211,7 @@ touch '%s'
 
 # Cleanup (leave result file for parsing)
 rm -f '%s' '%s' '%s'
-`, resultFile, parseScript, sysFile, promptFile, sess.DoneFile, promptFile, sysFile, scriptFile)
+`, resultFile, parseScript, sysFile, promptFile, toolFlags, sess.DoneFile, promptFile, sysFile, scriptFile)
 	} else {
 		script = fmt.Sprintf(`#!/bin/bash
 echo ''
@@ -217,7 +228,7 @@ export RESULT_FILE='%s'
 USER_PROMPT="$(cat '%s')"
 
 # Run Claude with stream-json and parse output
-claude -p --dangerously-skip-permissions --verbose --output-format stream-json "$USER_PROMPT" 2>&1 | parse_claude_output
+claude -p --dangerously-skip-permissions --verbose --output-format stream-json %s "$USER_PROMPT" 2>&1 | parse_claude_output
 
 EXIT_CODE=$?
 echo ''
@@ -231,7 +242,7 @@ touch '%s'
 
 # Cleanup (leave result file for parsing)
 rm -f '%s' '%s'
-`, resultFile, parseScript, promptFile, sess.DoneFile, promptFile, scriptFile)
+`, resultFile, parseScript, promptFile, toolFlags, sess.DoneFile, promptFile, scriptFile)
 	}
 
 	if err := os.WriteFile(scriptFile, []byte(script), 0755); err != nil {
@@ -397,7 +408,7 @@ func extractClaudeOutput(paneContent string) string {
 
 // RunClaude runs Claude in the session with the given prompt via stdin.
 func (m *Manager) RunClaude(ctx context.Context, sess *Session, systemPrompt, userPrompt string) (string, error) {
-	return m.RunClaudeStreaming(ctx, sess, systemPrompt, userPrompt)
+	return m.RunClaudeStreaming(ctx, sess, systemPrompt, userPrompt, false, nil)
 }
 
 // KillSession terminates a tmux session.

@@ -159,6 +159,15 @@ Externalized settings for all components:
 - Claude CLI settings
 - Token budgets for handoffs
 
+### 🔧 Claude CLI Tool Capabilities (NEW)
+Enable agents to use Claude CLI's built-in tools for real code exploration and editing:
+- **Planner Agent**: Uses Read, Grep, Glob to explore codebase (not just prompt-based guessing)
+- **Executor Agent**: Uses full toolset (Read, Edit, Bash, Grep, Glob) for development
+- **Test-driven development**: Agents run tests via Bash and fix failures in real-time
+- **Precise edits**: Edit tool for surgical changes instead of text generation
+- **Verification loops**: Agents verify their changes before completing
+- Enable with `enable_tools: true` in config (disabled by default for backward compatibility)
+
 ### 🧪 E2E Test Environment (NEW)
 Complete test harness for integration testing:
 - Mock Linear GraphQL server
@@ -220,6 +229,7 @@ base_branch: main
 review_skill: peer-review  # Claude skill/agent for code review
 
 # Feature toggles
+enable_tools: false         # Enable Claude CLI tool capabilities (Read, Edit, Bash, Grep, Glob)
 enable_preflight: true
 enable_tests: true
 enable_diff_verify: true

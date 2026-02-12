@@ -32,18 +32,34 @@ type ExecutionResult struct {
 }
 
 // New creates a new Executor.
-func New(worktreePath string) *Executor {
+func New(worktreePath string, enableTools bool) *Executor {
+	var client *claude.Client
+	if enableTools {
+		// Full toolset for development: Read, Edit, Bash, Grep, Glob
+		client = claude.NewWithTools(worktreePath, "executor", nil) // nil = allow all tools
+	} else {
+		// Backward compatibility - no tools
+		client = claude.NewWithTmux(worktreePath, "executor")
+	}
 	return &Executor{
-		client:       claude.NewWithTmux(worktreePath, "executor"),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }
 
 // NewRefactorExecutor creates an executor for a refactor iteration.
-func NewRefactorExecutor(worktreePath string, iteration int) *Executor {
+func NewRefactorExecutor(worktreePath string, iteration int, enableTools bool) *Executor {
 	sessionName := fmt.Sprintf("refactor-%d", iteration)
+	var client *claude.Client
+	if enableTools {
+		// Full toolset for refactoring: Read, Edit, Bash, Grep, Glob
+		client = claude.NewWithTools(worktreePath, sessionName, nil) // nil = allow all tools
+	} else {
+		// Backward compatibility - no tools
+		client = claude.NewWithTmux(worktreePath, sessionName)
+	}
 	return &Executor{
-		client:       claude.NewWithTmux(worktreePath, sessionName),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }
@@ -70,9 +86,16 @@ func (e *Executor) ExecuteWithPlan(ctx context.Context, ticket *linear.Ticket, p
 	projectRules := e.LoadProjectRules()
 
 	// Build system prompt with project rules
-	systemPrompt := `You are an expert software developer. Execute the development task described.
-Use your file editing tools to create and modify files as needed.
-Do not ask for permission - just implement the solution.
+	systemPrompt := `You are an expert software developer with access to code exploration and editing tools.
+
+Your development workflow:
+1. Use Grep/Glob to find relevant files
+2. Use Read to understand existing code
+3. Use Edit to make changes
+4. Use Bash to run tests and verify your changes
+5. Iterate until tests pass
+
+Execute the development task described. Do not ask for permission - just implement and verify the solution.
 
 You have been given a plan from a planning agent. Follow the approach and read the key files first.
 If implementation already exists, add tests or make improvements as needed.`

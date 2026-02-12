@@ -1,0 +1,47 @@
+# Boatman Configuration Example
+# Copy this to ~/.boatman.yaml and customize
+
+# Linear API key (can also use LINEAR_API_KEY env var)
+# linear_key: "your-api-key-here"
+
+# Base branch for PRs (default: main)
+base_branch: "main"
+
+# Maximum refactor iterations (default: 3)
+max_iterations: 3
+
+# Automatically create PR when work is complete (default: false)
+auto_pr: false
+
+# Review skill to use for code review (default: peer-review)
+# Available: peer-review, scottbott
+review_skill: "peer-review"
+
+# Enable Claude CLI tool capabilities (default: false)
+# When enabled, agents can use Read, Edit, Bash, Grep, Glob tools
+# to explore codebases, make precise edits, and run tests during development
+enable_tools: false
+
+# Claude CLI settings
+claude:
+  command: "claude"
+  use_tmux: false
+  large_prompt_threshold: 100000
+  timeout: 0
+
+# Coordinator settings
+coordinator:
+  message_buffer_size: 1000
+  subscriber_buffer_size: 100
+
+# Retry settings
+retry:
+  max_attempts: 3
+  initial_delay: 500ms
+  max_delay: 30s
+
+# Token budgets for context management
+token_budget:
+  context: 8000
+  plan: 2000
+  review: 4000

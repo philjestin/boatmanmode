@@ -45,9 +45,17 @@ type Planner struct {
 }
 
 // New creates a new Planner agent.
-func New(worktreePath string) *Planner {
+func New(worktreePath string, enableTools bool) *Planner {
+	var client *claude.Client
+	if enableTools {
+		// Allow planner to explore codebase with Read, Grep, Glob
+		client = claude.NewWithTools(worktreePath, "planner", []string{"Read", "Grep", "Glob"})
+	} else {
+		// Backward compatibility - no tools
+		client = claude.NewWithTmux(worktreePath, "planner")
+	}
 	return &Planner{
-		client:       claude.NewWithTmux(worktreePath, "planner"),
+		client:       client,
 		worktreePath: worktreePath,
 	}
 }
