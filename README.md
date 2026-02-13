@@ -67,6 +67,31 @@ An AI-powered development agent that automates ticket execution with peer review
 
 ## 🆕 New Features
 
+### 📝 Multiple Input Modes (NEW)
+Work from Linear tickets, inline prompts, or files - same 9-step workflow:
+
+```bash
+# Linear mode (existing)
+boatman work ENG-123
+
+# Prompt mode (new)
+boatman work --prompt "Add authentication with JWT tokens"
+
+# File mode (new)
+boatman work --file ./tasks/authentication.md
+```
+
+**Features:**
+- Auto-generates unique task IDs for prompt/file modes
+- Extracts titles from markdown headers or first line
+- Auto-generates safe git branch names
+- Same quality workflow regardless of input source
+- Override auto-generation with `--title` and `--branch-name` flags
+
+See [TASK_MODES.md](TASK_MODES.md) for complete documentation.
+
+---
+
 ### 🚀 Pre-flight Validation Agent
 Validates the execution plan before any code changes:
 - Verifies all referenced files exist
@@ -210,6 +235,34 @@ export ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
 
 ## Installation
 
+### Option 1: Download Pre-built Binary (Recommended)
+
+Download the latest release for your platform from the [releases page](https://github.com/philjestin/boatmanmode/releases), or use the install script:
+
+```bash
+# macOS/Linux one-liner
+curl -fsSL https://raw.githubusercontent.com/philjestin/boatmanmode/main/install.sh | bash
+
+# Or download specific version
+curl -fsSL https://raw.githubusercontent.com/philjestin/boatmanmode/main/install.sh | bash -s -- --version v1.0.0
+
+# Or install to custom directory
+curl -fsSL https://raw.githubusercontent.com/philjestin/boatmanmode/main/install.sh | bash -s -- --dir ~/bin
+```
+
+Supported platforms:
+- **macOS**: Intel (amd64) and Apple Silicon (arm64)
+- **Linux**: x86_64 and ARM64
+- **Windows**: x86_64
+
+### Option 2: Install with Go
+
+```bash
+go install github.com/philjestin/boatmanmode/cmd/boatman@latest
+```
+
+### Option 3: Build from Source
+
 ```bash
 git clone https://github.com/philjestin/boatmanmode
 cd boatmanmode
@@ -217,6 +270,12 @@ go build -o boatman ./cmd/boatman
 
 # Optional: Add to PATH
 sudo mv boatman /usr/local/bin/
+```
+
+### Verify Installation
+
+```bash
+boatman version
 ```
 
 ## Configuration
@@ -282,11 +341,24 @@ token_budget:
 
 ## Usage
 
-### Execute a Ticket
+### Execute a Task
+
+BoatmanMode supports three input modes:
 
 ```bash
 cd /path/to/your/project
+
+# 1. Linear ticket (default)
 boatman work ENG-123
+
+# 2. Inline prompt
+boatman work --prompt "Add a health check endpoint at /health"
+
+# 3. File-based prompt
+boatman work --file ./tasks/authentication.md
+
+# With custom title and branch
+boatman work --prompt "Add auth" --title "Authentication" --branch-name "feature/auth"
 ```
 
 ### Watch Claude Work (Live Streaming)
@@ -496,6 +568,44 @@ Cross-session learning improves over time:
 # - Effective prompts
 # - Project preferences
 ```
+
+## Using as a Go Library
+
+BoatmanMode can be used as a library in your own Go applications:
+
+```bash
+go get github.com/philjestin/boatmanmode@latest
+```
+
+**Quick Example:**
+
+```go
+package main
+
+import (
+    "context"
+    "github.com/philjestin/boatmanmode"
+)
+
+func main() {
+    cfg := &boatmanmode.Config{
+        LinearKey:     "your-api-key",
+        BaseBranch:    "main",
+        MaxIterations: 3,
+        EnableTools:   true,
+    }
+
+    a, _ := boatmanmode.NewAgent(cfg)
+    t, _ := boatmanmode.NewPromptTask("Add health check endpoint", "", "")
+    result, _ := a.Work(context.Background(), t)
+
+    if result.PRCreated {
+        println("PR created:", result.PRURL)
+    }
+}
+```
+
+See [LIBRARY_USAGE.md](LIBRARY_USAGE.md) for complete API documentation and examples.
 
 ## Project Structure
 

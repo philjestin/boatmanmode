@@ -1,0 +1,147 @@
+# GoReleaser configuration for boatmanmode
+# Documentation: https://goreleaser.com
+
+version: 1
+
+before:
+  hooks:
+    # Ensure dependencies are up to date
+    - go mod tidy
+    - go mod download
+
+builds:
+  - id: boatman
+    main: ./cmd/boatman
+    binary: boatman
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Ignore combinations that don't make sense
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -X main.builtBy=goreleaser
+
+archives:
+  - id: boatman
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - README.md
+      - LICENSE
+      - TASK_MODES.md
+      - example-task.txt
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'merge conflict'
+      - Merge pull request
+      - Merge remote-tracking branch
+      - Merge branch
+  groups:
+    - title: 'New Features'
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: 'Bug Fixes'
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: 'Performance Improvements'
+      regexp: '^.*?perf(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: 'Refactors'
+      regexp: '^.*?refactor(\([[:word:]]+\))??!?:.+$'
+      order: 3
+    - title: 'Dependency Updates'
+      regexp: '^.*?(feat|fix)\(deps\)!?:.+$'
+      order: 4
+    - title: 'Other Changes'
+      order: 999
+
+release:
+  github:
+    owner: philjestin
+    name: boatmanmode
+  name_template: "{{.ProjectName}}-v{{.Version}}"
+  draft: false
+  prerelease: auto
+  make_latest: true
+  header: |
+    ## BoatmanMode {{ .Tag }} ({{ .Date }})
+
+    Welcome to this new release of BoatmanMode! 🚣
+
+  footer: |
+    ## Installation
+
+    ### Binary Download
+    Download the appropriate binary for your platform from the assets below.
+
+    ### Using Go Install
+    ```bash
+    go install github.com/philjestin/boatmanmode/cmd/boatman@{{ .Tag }}
+    ```
+
+    ### Verify Download
+    ```bash
+    sha256sum -c checksums.txt
+    ```
+
+    ---
+
+    **Full Changelog**: https://github.com/philjestin/boatmanmode/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+# Optional: Homebrew tap for easy installation on macOS
+# Uncomment and configure if you want to set up a Homebrew tap
+# brews:
+#   - name: boatman
+#     repository:
+#       owner: philjestin
+#       name: homebrew-tap
+#     homepage: https://github.com/philjestin/boatmanmode
+#     description: "AI-powered autonomous development agent"
+#     license: MIT
+#     install: |
+#       bin.install "boatman"
+
+# Docker images (optional)
+# dockers:
+#   - image_templates:
+#       - "philjestin/boatmanmode:{{ .Tag }}"
+#       - "philjestin/boatmanmode:latest"
+#     build_flag_templates:
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.title={{.ProjectName}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"

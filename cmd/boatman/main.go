@@ -10,7 +10,18 @@ import (
 	"github.com/philjestin/boatmanmode/internal/cli"
 )
 
+// Build information. Populated at build time by GoReleaser.
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+	builtBy = "unknown"
+)
+
 func main() {
+	// Set version info for CLI
+	cli.SetVersionInfo(version, commit, date, builtBy)
+
 	if err := cli.Execute(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
