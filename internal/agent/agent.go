@@ -23,6 +23,7 @@ import (
 	"github.com/philjestin/boatmanmode/internal/planner"
 	"github.com/philjestin/boatmanmode/internal/preflight"
 	"github.com/philjestin/boatmanmode/internal/scottbott"
+	"github.com/philjestin/boatmanmode/internal/task"
 	"github.com/philjestin/boatmanmode/internal/testrunner"
 	"github.com/philjestin/boatmanmode/internal/worktree"
 )
@@ -46,7 +47,7 @@ type WorkResult struct {
 
 // workContext holds state shared between workflow steps.
 type workContext struct {
-	ticket       *linear.Ticket
+	task         task.Task
 	worktree     *worktree.Worktree
 	branchName   string
 	pinner       *contextpin.ContextPinner
@@ -69,10 +70,11 @@ func New(cfg *config.Config) (*Agent, error) {
 	}, nil
 }
 
-// Work executes the complete workflow for a ticket.
-// Orchestrates 9 steps: fetch → worktree → plan → validate → execute → test → review → commit → PR
-func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) {
+// Work executes the complete workflow for a task.
+// Orchestrates 9 steps: prepare → worktree → plan → validate → execute → test → review → commit → PR
+func (a *Agent) Work(ctx context.Context, t task.Task) (*WorkResult, error) {
 	wc := &workContext{
+		task:        t,
 		startTime:   time.Now(),
 		costTracker: cost.NewTracker(),
 	}
@@ -81,8 +83,8 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	a.coordinator.Start(ctx)
 	defer a.coordinator.Stop()
 
-	// Step 1: Fetch ticket
-	if err := a.stepFetchTicket(ctx, ticketID, wc); err != nil {
+	// Step 1: Prepare task (already received as parameter)
+	if err := a.stepPrepareTask(ctx, wc); err != nil {
 		return nil, err
 	}
 
@@ -137,29 +139,29 @@ func (a *Agent) Work(ctx context.Context, ticketID string) (*WorkResult, error) 
 	return a.stepCreatePR(ctx, wc)
 }
 
-// stepFetchTicket fetches the ticket from Linear (Step 1).
-func (a *Agent) stepFetchTicket(ctx context.Context, ticketID string, wc *workContext) error {
-	printStep(1, 9, "Fetching ticket from Linear")
-	fmt.Printf("   🎫 Ticket ID: %s\n", ticketID)
+// stepPrepareTask displays task information (Step 1).
+func (a *Agent) stepPrepareTask(ctx context.Context, wc *workContext) error {
+	printStep(1, 9, "Preparing task")
+	fmt.Printf("   🎫 Task ID: %s\n", wc.task.GetID())
 
-	ticket, err := a.linearClient.GetTicket(ctx, ticketID)
-	if err != nil {
-		return fmt.Errorf("failed to fetch ticket: %w", err)
+	metadata := wc.task.GetMetadata()
+	fmt.Printf("   📋 Source: %s\n", metadata.Source)
+	fmt.Printf("   📝 Title: %s\n", wc.task.GetTitle())
+
+	labels := wc.task.GetLabels()
+	if len(labels) > 0 {
+		fmt.Printf("   🏷️  Labels: %s\n", strings.Join(labels, ", "))
 	}
 
-	wc.ticket = ticket
-
-	fmt.Printf("   📋 Title: %s\n", ticket.Title)
-	fmt.Printf("   🏷️  Labels: %s\n", strings.Join(ticket.Labels, ", "))
 	fmt.Println()
 	fmt.Println("   📝 Description:")
-	printIndented(truncate(ticket.Description, 800), "      ")
+	printIndented(truncate(wc.task.GetDescription(), 800), "      ")
 	fmt.Println()
 
 	return nil
 }
 
-// stepSetupWorktree creates a git worktree for the ticket (Step 2).
+// stepSetupWorktree creates a git worktree for the task (Step 2).
 func (a *Agent) stepSetupWorktree(ctx context.Context, wc *workContext) error {
 	printStep(2, 9, "Setting up git worktree")
 
@@ -174,10 +176,7 @@ func (a *Agent) stepSetupWorktree(ctx context.Context, wc *workContext) error {
 		return fmt.Errorf("failed to create worktree manager: %w", err)
 	}
 
-	branchName := wc.ticket.BranchName
-	if branchName == "" {
-		branchName = fmt.Sprintf("%s-%s", wc.ticket.Identifier, sanitize(wc.ticket.Title))
-	}
+	branchName := wc.task.GetBranchName()
 	fmt.Printf("   🌿 Branch: %s\n", branchName)
 
 	wt, err := wtManager.Create(branchName, a.config.BaseBranch)
@@ -207,7 +206,7 @@ func (a *Agent) stepPlanning(ctx context.Context, wc *workContext) error {
 	go func() {
 		defer wg.Done()
 		planAgent := planner.New(wc.worktree.Path, a.config)
-		plan, usage, err := planAgent.Analyze(ctx, wc.ticket)
+		plan, usage, err := planAgent.Analyze(ctx, wc.task)
 		if err != nil {
 			fmt.Printf("   ⚠️  Planning failed: %v (continuing without plan)\n", err)
 			return
@@ -270,7 +269,7 @@ func (a *Agent) stepExecute(ctx context.Context, wc *workContext) error {
 	printStep(5, 9, "Executing development task")
 
 	wc.exec = executor.New(wc.worktree.Path, a.config)
-	result, usage, err := wc.exec.ExecuteWithPlan(ctx, wc.ticket, wc.plan)
+	result, usage, err := wc.exec.ExecuteWithPlan(ctx, wc.task, wc.plan)
 	if err != nil {
 		return fmt.Errorf("execution failed: %w", err)
 	}
@@ -319,7 +318,7 @@ func (a *Agent) stepTestAndReview(ctx context.Context, wc *workContext) error {
 	// Run initial review in parallel
 	go func() {
 		defer wg.Done()
-		reviewHandoff := handoff.NewReviewHandoff(wc.ticket, initialDiff, wc.execResult.FilesChanged)
+		reviewHandoff := handoff.NewReviewHandoff(wc.task, initialDiff, wc.execResult.FilesChanged)
 		reviewer := scottbott.NewWithSkill(wc.worktree.Path, 1, a.config.ReviewSkill, a.config)
 		reviewResult, usage, _ := reviewer.Review(ctx, reviewHandoff.Concise(), initialDiff)
 		wc.reviewResult = reviewResult
@@ -406,7 +405,7 @@ func (a *Agent) doReview(ctx context.Context, wc *workContext, previousDiff *str
 	}
 	fmt.Printf("   📏 Diff size: %d lines\n", strings.Count(diff, "\n"))
 
-	reviewHandoff := handoff.NewReviewHandoff(wc.ticket, diff, wc.execResult.FilesChanged)
+	reviewHandoff := handoff.NewReviewHandoff(wc.task, diff, wc.execResult.FilesChanged)
 	reviewer := scottbott.NewWithSkill(wc.worktree.Path, wc.iterations, a.config.ReviewSkill, a.config)
 	reviewResult, usage, err := reviewer.Review(ctx, reviewHandoff.ForTokenBudget(handoff.DefaultBudget.Context), diff)
 	if err != nil {
@@ -435,7 +434,7 @@ func (a *Agent) doRefactor(ctx context.Context, wc *workContext, previousDiff st
 	projectRules := refactorExec.LoadProjectRules()
 
 	refactorHandoff := handoff.NewRefactorHandoff(
-		wc.ticket,
+		wc.task,
 		wc.reviewResult.GetIssueDescriptions(),
 		wc.reviewResult.Guidance,
 		wc.execResult.FilesChanged,
@@ -486,8 +485,8 @@ func (a *Agent) stepCommitAndPush(ctx context.Context, wc *workContext) error {
 	printStep(8, 9, "Committing and pushing")
 
 	commitMsg := fmt.Sprintf("feat(%s): %s\n\n%s",
-		wc.ticket.Identifier,
-		wc.ticket.Title,
+		wc.task.GetID(),
+		wc.task.GetTitle(),
 		wc.reviewResult.Summary,
 	)
 	fmt.Println("   💾 Creating commit...")
@@ -510,7 +509,13 @@ func (a *Agent) stepCommitAndPush(ctx context.Context, wc *workContext) error {
 func (a *Agent) stepCreatePR(ctx context.Context, wc *workContext) (*WorkResult, error) {
 	printStep(9, 9, "Creating pull request")
 
-	prBody := fmt.Sprintf(`## %s
+	// Format PR body based on task source
+	metadata := wc.task.GetMetadata()
+	var prBody string
+
+	if metadata.Source == task.SourceLinear {
+		// Linear mode - include ticket link
+		prBody = fmt.Sprintf(`## %s
 
 ### Ticket
 [%s](https://linear.app/issue/%s)
@@ -529,18 +534,54 @@ func (a *Agent) stepCreatePR(ctx context.Context, wc *workContext) (*WorkResult,
 ---
 *Automated by BoatmanMode 🚣*
 `,
-		wc.ticket.Title,
-		wc.ticket.Identifier,
-		wc.ticket.Identifier,
-		wc.ticket.Description,
-		wc.reviewResult.Summary,
-		wc.iterations,
-		formatTestStatus(wc.testResult),
-		getTestCoverage(wc.testResult),
-	)
+			wc.task.GetTitle(),
+			wc.task.GetID(),
+			wc.task.GetID(),
+			wc.task.GetDescription(),
+			wc.reviewResult.Summary,
+			wc.iterations,
+			formatTestStatus(wc.testResult),
+			getTestCoverage(wc.testResult),
+		)
+	} else {
+		// Prompt/File mode - no ticket link
+		taskType := "Prompt-based"
+		if metadata.Source == task.SourceFile {
+			taskType = "File-based"
+		}
+
+		prBody = fmt.Sprintf(`## %s
+
+### Task
+%s task (%s)
+
+### Description
+%s
+
+### Changes
+%s
+
+### Quality
+- Review iterations: %d
+- Tests: %s
+- Coverage: %.1f%%
+
+---
+*Automated by BoatmanMode 🚣*
+`,
+			wc.task.GetTitle(),
+			taskType,
+			wc.task.GetID(),
+			truncate(wc.task.GetDescription(), 500),
+			wc.reviewResult.Summary,
+			wc.iterations,
+			formatTestStatus(wc.testResult),
+			getTestCoverage(wc.testResult),
+		)
+	}
 
 	fmt.Println("   🔗 Running: gh pr create")
-	prResult, err := github.CreatePRInDir(ctx, wc.worktree.Path, wc.ticket.Title, prBody, a.config.BaseBranch)
+	prResult, err := github.CreatePRInDir(ctx, wc.worktree.Path, wc.task.GetTitle(), prBody, a.config.BaseBranch)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create PR: %w", err)
 	}
@@ -565,7 +606,7 @@ func (a *Agent) printWorkflowSummary(wc *workContext, prURL string) {
 	fmt.Println("═══════════════════════════════════════════════════════════════════════")
 	fmt.Println("✅ WORKFLOW COMPLETE")
 	fmt.Println("═══════════════════════════════════════════════════════════════════════")
-	fmt.Printf("   🎫 Ticket:     %s\n", wc.ticket.Identifier)
+	fmt.Printf("   🎫 Task:       %s\n", wc.task.GetID())
 	fmt.Printf("   🌿 Branch:     %s\n", wc.branchName)
 	fmt.Printf("   🔄 Iterations: %d\n", wc.iterations)
 	fmt.Printf("   🧪 Tests:      %s\n", formatTestStatus(wc.testResult))

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/philjestin/boatmanmode/internal/linear"
+	"github.com/philjestin/boatmanmode/internal/task"
 )
 
 // Handoff is the interface for passing context between agents.
@@ -63,15 +64,20 @@ type ExecutionHandoff struct {
 	BranchName  string
 }
 
-// NewExecutionHandoff creates a handoff from a Linear ticket.
-func NewExecutionHandoff(ticket *linear.Ticket) *ExecutionHandoff {
+// NewExecutionHandoff creates a handoff from a Task.
+func NewExecutionHandoff(t task.Task) *ExecutionHandoff {
 	return &ExecutionHandoff{
-		TicketID:    ticket.Identifier,
-		Title:       ticket.Title,
-		Description: ticket.Description,
-		Labels:      ticket.Labels,
-		BranchName:  ticket.BranchName,
+		TicketID:    t.GetID(),
+		Title:       t.GetTitle(),
+		Description: t.GetDescription(),
+		Labels:      t.GetLabels(),
+		BranchName:  t.GetBranchName(),
 	}
+}
+
+// NewExecutionHandoffFromTicket creates a handoff from a Linear ticket (backward compatibility).
+func NewExecutionHandoffFromTicket(ticket *linear.Ticket) *ExecutionHandoff {
+	return NewExecutionHandoff(task.NewLinearTask(ticket))
 }
 
 // Full returns the complete execution context.
@@ -131,14 +137,19 @@ type ReviewHandoff struct {
 }
 
 // NewReviewHandoff creates a handoff for code review.
-func NewReviewHandoff(ticket *linear.Ticket, diff string, filesChanged []string) *ReviewHandoff {
+func NewReviewHandoff(t task.Task, diff string, filesChanged []string) *ReviewHandoff {
 	return &ReviewHandoff{
-		TicketID:     ticket.Identifier,
-		Title:        ticket.Title,
-		Requirements: extractRequirements(ticket.Description),
+		TicketID:     t.GetID(),
+		Title:        t.GetTitle(),
+		Requirements: extractRequirements(t.GetDescription()),
 		Diff:         diff,
 		FilesChanged: filesChanged,
 	}
+}
+
+// NewReviewHandoffFromTicket creates a review handoff from a Linear ticket (backward compatibility).
+func NewReviewHandoffFromTicket(ticket *linear.Ticket, diff string, filesChanged []string) *ReviewHandoff {
+	return NewReviewHandoff(task.NewLinearTask(ticket), diff, filesChanged)
 }
 
 // Full returns the complete review context.
@@ -224,17 +235,22 @@ type RefactorHandoff struct {
 
 // NewRefactorHandoff creates a handoff for refactoring.
 // projectRules should contain the project's coding standards (from .cursorrules, CLAUDE.md, etc.)
-func NewRefactorHandoff(ticket *linear.Ticket, issues []string, guidance string, filesToUpdate []string, currentCode string, projectRules string) *RefactorHandoff {
+func NewRefactorHandoff(t task.Task, issues []string, guidance string, filesToUpdate []string, currentCode string, projectRules string) *RefactorHandoff {
 	return &RefactorHandoff{
-		TicketID:      ticket.Identifier,
-		Title:         ticket.Title,
-		Requirements:  extractRequirements(ticket.Description),
+		TicketID:      t.GetID(),
+		Title:         t.GetTitle(),
+		Requirements:  extractRequirements(t.GetDescription()),
 		Issues:        issues,
 		Guidance:      guidance,
 		FilesToUpdate: filesToUpdate,
 		CurrentCode:   currentCode,
 		ProjectRules:  projectRules,
 	}
+}
+
+// NewRefactorHandoffFromTicket creates a refactor handoff from a Linear ticket (backward compatibility).
+func NewRefactorHandoffFromTicket(ticket *linear.Ticket, issues []string, guidance string, filesToUpdate []string, currentCode string, projectRules string) *RefactorHandoff {
+	return NewRefactorHandoff(task.NewLinearTask(ticket), issues, guidance, filesToUpdate, currentCode, projectRules)
 }
 
 // Full returns the complete refactor context.

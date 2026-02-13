@@ -17,6 +17,7 @@ import (
 	"github.com/philjestin/boatmanmode/internal/handoff"
 	"github.com/philjestin/boatmanmode/internal/linear"
 	"github.com/philjestin/boatmanmode/internal/planner"
+	"github.com/philjestin/boatmanmode/internal/task"
 )
 
 // Executor performs AI-powered development tasks.
@@ -82,17 +83,21 @@ func NewRefactorExecutor(worktreePath string, iteration int, cfg *config.Config)
 	}
 }
 
-// Execute performs the development task described in the ticket.
-func (e *Executor) Execute(ctx context.Context, ticket *linear.Ticket) (*ExecutionResult, *cost.Usage, error) {
-	// Use planning agent to analyze the ticket first
-	return e.ExecuteWithPlan(ctx, ticket, nil)
+// Execute performs the development task.
+func (e *Executor) Execute(ctx context.Context, t task.Task) (*ExecutionResult, *cost.Usage, error) {
+	return e.ExecuteWithPlan(ctx, t, nil)
+}
+
+// ExecuteTicket is a backward-compatibility wrapper for Linear tickets.
+func (e *Executor) ExecuteTicket(ctx context.Context, ticket *linear.Ticket) (*ExecutionResult, *cost.Usage, error) {
+	return e.Execute(ctx, task.NewLinearTask(ticket))
 }
 
 // ExecuteWithPlan performs execution with an optional pre-computed plan.
-func (e *Executor) ExecuteWithPlan(ctx context.Context, ticket *linear.Ticket, plan *planner.Plan) (*ExecutionResult, *cost.Usage, error) {
-	// Build prompt with ticket
+func (e *Executor) ExecuteWithPlan(ctx context.Context, t task.Task, plan *planner.Plan) (*ExecutionResult, *cost.Usage, error) {
+	// Build prompt with task
 	fmt.Println("   📖 Building execution prompt...")
-	prompt := e.buildPrompt(ticket)
+	prompt := e.buildPrompt(t)
 
 	// Add planning handoff if available
 	if plan != nil {
@@ -219,7 +224,7 @@ func (e *Executor) detectChangedFiles() ([]string, error) {
 }
 
 // Refactor applies feedback from ScottBott to improve the code.
-func (e *Executor) Refactor(ctx context.Context, ticket *linear.Ticket, reviewFeedback string, changedFiles []string) (*ExecutionResult, *cost.Usage, error) {
+func (e *Executor) Refactor(ctx context.Context, t task.Task, reviewFeedback string, changedFiles []string) (*ExecutionResult, *cost.Usage, error) {
 	fmt.Println("   📖 Reading changed files...")
 	currentFiles, err := e.GetSpecificFiles(changedFiles)
 	if err != nil {
@@ -227,7 +232,7 @@ func (e *Executor) Refactor(ctx context.Context, ticket *linear.Ticket, reviewFe
 	}
 	fmt.Printf("   📁 Loaded %d changed files\n", len(changedFiles))
 
-	prompt := fmt.Sprintf(`## Original Ticket
+	prompt := fmt.Sprintf(`## Original Task
 %s
 
 ## Current Implementation
@@ -237,7 +242,7 @@ func (e *Executor) Refactor(ctx context.Context, ticket *linear.Ticket, reviewFe
 %s
 
 Please refactor the code to address all the feedback. Provide complete updated files.`,
-		e.buildPrompt(ticket),
+		e.buildPrompt(t),
 		currentFiles,
 		reviewFeedback)
 
@@ -344,21 +349,27 @@ func (e *Executor) GetSpecificFiles(files []string) (string, error) {
 	return e.getSpecificFiles(files)
 }
 
-// buildPrompt creates the execution prompt from a ticket.
-func (e *Executor) buildPrompt(ticket *linear.Ticket) string {
+// buildPrompt creates the execution prompt from a task.
+func (e *Executor) buildPrompt(t task.Task) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("# %s\n\n", ticket.Title))
-	sb.WriteString(fmt.Sprintf("**Ticket ID:** %s\n", ticket.Identifier))
+	sb.WriteString(fmt.Sprintf("# %s\n\n", t.GetTitle()))
+	sb.WriteString(fmt.Sprintf("**Task ID:** %s\n", t.GetID()))
 
-	if len(ticket.Labels) > 0 {
-		sb.WriteString(fmt.Sprintf("**Labels:** %s\n", strings.Join(ticket.Labels, ", ")))
+	labels := t.GetLabels()
+	if len(labels) > 0 {
+		sb.WriteString(fmt.Sprintf("**Labels:** %s\n", strings.Join(labels, ", ")))
 	}
 
 	sb.WriteString("\n## Description\n")
-	sb.WriteString(ticket.Description)
+	sb.WriteString(t.GetDescription())
 
 	return sb.String()
+}
+
+// buildPromptFromTicket creates execution prompt from a Linear ticket (backward compatibility).
+func (e *Executor) buildPromptFromTicket(ticket *linear.Ticket) string {
+	return e.buildPrompt(task.NewLinearTask(ticket))
 }
 
 // parseAndApplyChanges extracts file changes from response and writes them.

@@ -14,6 +14,7 @@ import (
 	"github.com/philjestin/boatmanmode/internal/config"
 	"github.com/philjestin/boatmanmode/internal/cost"
 	"github.com/philjestin/boatmanmode/internal/linear"
+	"github.com/philjestin/boatmanmode/internal/task"
 )
 
 // Plan contains the structured output from the planning agent.
@@ -72,17 +73,17 @@ func New(worktreePath string, cfg *config.Config) *Planner {
 	}
 }
 
-// Analyze runs the planning agent to understand the ticket.
-func (p *Planner) Analyze(ctx context.Context, ticket *linear.Ticket) (*Plan, *cost.Usage, error) {
+// Analyze runs the planning agent to understand the task.
+func (p *Planner) Analyze(ctx context.Context, t task.Task) (*Plan, *cost.Usage, error) {
 	fmt.Println("   🧠 Running planning agent...")
 
 	systemPrompt := `You are a senior software architect planning a development task.
-Your job is to analyze the ticket and codebase to create a focused execution plan.
+Your job is to analyze the task and codebase to create a focused execution plan.
 
 IMPORTANT: Use your tools to explore the codebase. Do NOT guess - actually look at the code.
 
 Your process:
-1. Read the ticket requirements carefully
+1. Read the task requirements carefully
 2. Search for existing similar implementations (use Glob, Grep)
 3. Read key files to understand patterns
 4. Identify files that need to be created or modified
@@ -118,17 +119,17 @@ After exploration, output a JSON plan in this exact format:
 
 Output ONLY the JSON block after your exploration. No other text after the JSON.`
 
-	prompt := fmt.Sprintf(`# Ticket: %s
+	prompt := fmt.Sprintf(`# Task: %s
 
 ## Description
 %s
 
-Analyze this ticket and explore the codebase to create an execution plan.
+Analyze this task and explore the codebase to create an execution plan.
 Focus on understanding existing patterns before proposing new code.`,
-		ticket.Title,
-		ticket.Description)
+		t.GetTitle(),
+		t.GetDescription())
 
-	fmt.Println("   📝 Analyzing ticket and exploring codebase...")
+	fmt.Println("   📝 Analyzing task and exploring codebase...")
 
 	start := time.Now()
 	response, usage, err := p.client.Message(ctx, systemPrompt, prompt)
@@ -159,6 +160,11 @@ Focus on understanding existing patterns before proposing new code.`,
 	}
 
 	return plan, usage, nil
+}
+
+// AnalyzeTicket is a backward-compatibility wrapper for Linear tickets.
+func (p *Planner) AnalyzeTicket(ctx context.Context, ticket *linear.Ticket) (*Plan, *cost.Usage, error) {
+	return p.Analyze(ctx, task.NewLinearTask(ticket))
 }
 
 // parsePlan extracts the JSON plan from Claude's response.

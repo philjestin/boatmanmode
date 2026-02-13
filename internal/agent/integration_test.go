@@ -467,8 +467,8 @@ func TestAgentWorkContextInitialization(t *testing.T) {
 		t.Error("startTime should be set")
 	}
 
-	if wc.ticket != nil {
-		t.Error("ticket should be nil initially")
+	if wc.task != nil {
+		t.Error("task should be nil initially")
 	}
 
 	if wc.iterations != 0 {

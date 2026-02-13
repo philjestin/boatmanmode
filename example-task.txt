@@ -1,0 +1,8 @@
+# Add health check endpoint
+
+Add a simple HTTP health check endpoint at `/health` that returns a 200 OK status with a JSON response containing:
+- `status`: "healthy"
+- `timestamp`: current time in ISO 8601 format
+- `version`: application version from config
+
+The endpoint should be implemented following existing API patterns in the codebase.
