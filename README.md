@@ -260,6 +260,8 @@ export ANTHROPIC_VERTEX_PROJECT_ID=your-project-id
 
 Download the latest release for your platform from the [releases page](https://github.com/philjestin/boatmanmode/releases), or use the install script:
 
+> **Note:** Releases are created automatically when code is pushed to `main`. See [RELEASING.md](RELEASING.md) for details on automatic versioning.
+
 ```bash
 # macOS/Linux one-liner
 curl -fsSL https://raw.githubusercontent.com/philjestin/boatmanmode/main/install.sh | bash

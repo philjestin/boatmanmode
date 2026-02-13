@@ -4,7 +4,43 @@ This document describes how to create a new release of BoatmanMode.
 
 ## Overview
 
-Releases are automated using GitHub Actions and [GoReleaser](https://goreleaser.com/). When you push a version tag, GitHub Actions will:
+BoatmanMode has **automatic versioning** enabled. Releases are created automatically when you push to `main`:
+
+1. **Auto-Version Workflow** calculates the next version based on commit messages
+2. **Release Workflow** builds binaries and creates a GitHub release
+3. All artifacts are published automatically
+
+### How Automatic Versioning Works
+
+When you push to `main`, the auto-version workflow:
+
+1. Reads your latest commit message
+2. Determines the version bump type:
+   - `breaking:` or `major:` → Major version bump (v2.0.0)
+   - `feat:` or `feature:` or `minor:` → Minor version bump (v1.1.0)
+   - Everything else → Patch version bump (v1.0.1)
+3. Creates and pushes a new git tag (e.g., `v1.0.1`)
+4. The new tag triggers the release workflow
+5. Binaries are built and released automatically
+
+**Example:**
+```bash
+# This will create v1.0.1 (patch bump)
+git commit -m "fix: correct error handling in executor"
+git push origin main
+
+# This will create v1.1.0 (minor bump)
+git commit -m "feat: add support for file-based prompts"
+git push origin main
+
+# This will create v2.0.0 (major bump)
+git commit -m "breaking: change public API interface"
+git push origin main
+```
+
+### What Gets Released
+
+For each version tag, GitHub Actions will:
 
 1. Run tests to ensure everything passes
 2. Build binaries for multiple platforms (Linux, macOS, Windows)
@@ -36,7 +72,38 @@ Before creating a release:
 
 ## Creating a Release
 
-### 1. Decide on Version Number
+### Automatic Release (Recommended)
+
+**Simply push to main** and a release will be created automatically:
+
+```bash
+# 1. Make your changes
+git add .
+
+# 2. Commit with appropriate prefix for version bump
+git commit -m "feat: add new feature"  # → v1.1.0 (minor bump)
+# OR
+git commit -m "fix: fix bug"           # → v1.0.1 (patch bump)
+# OR
+git commit -m "breaking: major change" # → v2.0.0 (major bump)
+
+# 3. Push to main
+git push origin main
+
+# That's it! A new version will be created automatically
+```
+
+The auto-version workflow will:
+- Calculate the next version based on your commit message
+- Create and push a git tag (e.g., `v1.1.0`)
+- Trigger the release workflow
+- Build and publish binaries
+
+### Manual Release (Advanced)
+
+If you prefer manual control, you can create tags yourself:
+
+#### 1. Decide on Version Number
 
 Follow [Semantic Versioning](https://semver.org/):
 
@@ -44,7 +111,7 @@ Follow [Semantic Versioning](https://semver.org/):
 - **MINOR** (v1.1.0): New features, backward compatible
 - **PATCH** (v1.0.1): Bug fixes, backward compatible
 
-### 2. Create and Push a Tag
+#### 2. Create and Push a Tag
 
 ```bash
 # Replace X.Y.Z with your version number
@@ -57,7 +124,7 @@ git tag -a $VERSION -m "Release $VERSION"
 git push origin $VERSION
 ```
 
-### 3. Monitor the Release
+#### 3. Monitor the Release
 
 1. Go to your repository on GitHub
 2. Click "Actions" tab
@@ -93,12 +160,32 @@ tar -xzf boatmanmode_v1.0.0_Darwin_arm64.tar.gz
 
 ### What Triggers a Release?
 
-Pushing any tag that starts with `v` triggers the release workflow:
+Releases can be triggered in two ways:
+
+1. **Automatic** (recommended): Push to `main` → Auto-version creates tag → Release triggered
+2. **Manual**: Push a tag starting with `v` → Release triggered
 
 ```bash
+# Automatic (push to main)
+git push origin main        # ✅ Auto-creates tag, triggers release
+
+# Manual (push tag)
 git push origin v1.0.0      # ✅ Triggers release
 git push origin v2.0.0-beta # ✅ Triggers release (marked as pre-release)
-git push origin test-tag    # ❌ Does not trigger release
+git push origin test-tag    # ❌ Does not trigger release (no 'v' prefix)
+```
+
+### Auto-Version Behavior
+
+The auto-version workflow:
+- **Triggers on**: Pushes to `main` branch
+- **Skips**: Changes to documentation only (*.md, docs/, examples/)
+- **Creates**: Annotated git tag with calculated version
+- **Pushes**: Tag to origin, which triggers release workflow
+
+To bypass auto-versioning for a specific push, include `[skip ci]` in your commit message:
+```bash
+git commit -m "docs: update README [skip ci]"
 ```
 
 ### Changelog Generation
@@ -184,6 +271,21 @@ GoReleaser will automatically mark releases as "pre-release" if the version cont
 
 ## Troubleshooting
 
+### Disable Automatic Versioning
+
+If you prefer manual versioning only:
+
+1. Delete or disable the auto-version workflow:
+   ```bash
+   rm .github/workflows/auto-version.yml
+   # OR rename it
+   mv .github/workflows/auto-version.yml .github/workflows/auto-version.yml.disabled
+   ```
+
+2. Commit and push the change
+
+3. From now on, create releases manually by pushing tags
+
 ### Release Workflow Failed
 
 1. Check the GitHub Actions logs for errors
@@ -191,6 +293,27 @@ GoReleaser will automatically mark releases as "pre-release" if the version cont
    - **Tests failing**: Fix the tests and create a new tag
    - **Build errors**: Check that code compiles on all platforms
    - **Permission errors**: Ensure GITHUB_TOKEN has correct permissions
+
+### Auto-Version Created Wrong Version
+
+If auto-version created the wrong version bump:
+
+1. Delete the tag:
+   ```bash
+   # Delete locally
+   git tag -d v1.0.1
+
+   # Delete on GitHub
+   git push origin :refs/tags/v1.0.1
+
+   # Delete the release on GitHub (via web UI)
+   ```
+
+2. Create the correct tag manually:
+   ```bash
+   git tag -a v1.1.0 -m "Release v1.1.0"
+   git push origin v1.1.0
+   ```
 
 ### Need to Redo a Release
 
@@ -226,7 +349,8 @@ ls -lh dist/
 
 The release process is configured by:
 
-- `.github/workflows/release.yml` - GitHub Actions workflow
+- `.github/workflows/auto-version.yml` - Auto-version workflow (creates tags from commits)
+- `.github/workflows/release.yml` - Release workflow (builds and publishes)
 - `.goreleaser.yml` - GoReleaser configuration
 - `cmd/boatman/main.go` - Version variable definitions
 - `internal/cli/version.go` - Version command implementation

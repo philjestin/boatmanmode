@@ -1,0 +1,100 @@
+name: Auto Version
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+      - 'examples/**'
+
+permissions:
+  contents: write
+
+jobs:
+  auto-version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper versioning
+
+      - name: Get latest tag
+        id: get_tag
+        run: |
+          # Get the latest tag, default to v0.0.0 if no tags exist
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          echo "Latest tag: $LATEST_TAG"
+
+      - name: Calculate next version
+        id: calc_version
+        run: |
+          LATEST_TAG="${{ steps.get_tag.outputs.latest_tag }}"
+
+          # Remove 'v' prefix
+          VERSION=${LATEST_TAG#v}
+
+          # Split version into parts
+          IFS='.' read -r -a VERSION_PARTS <<< "$VERSION"
+          MAJOR="${VERSION_PARTS[0]:-0}"
+          MINOR="${VERSION_PARTS[1]:-0}"
+          PATCH="${VERSION_PARTS[2]:-0}"
+
+          # Check commit message for version bump hints
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+
+          if echo "$COMMIT_MSG" | grep -qiE "^(breaking|major):"; then
+            # Major version bump
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif echo "$COMMIT_MSG" | grep -qiE "^(feat|feature|minor):"; then
+            # Minor version bump
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            # Patch version bump (default)
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW_VERSION="v${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Next version: $NEW_VERSION"
+
+      - name: Check if tag exists
+        id: check_tag
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+          if git rev-parse "$NEW_VERSION" >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Tag $NEW_VERSION already exists"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Tag $NEW_VERSION does not exist"
+          fi
+
+      - name: Create and push tag
+        if: steps.check_tag.outputs.exists == 'false'
+        run: |
+          NEW_VERSION="${{ steps.calc_version.outputs.new_version }}"
+
+          # Configure git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create annotated tag
+          git tag -a "$NEW_VERSION" -m "Release $NEW_VERSION"
+
+          # Push tag
+          git push origin "$NEW_VERSION"
+
+          echo "✅ Created and pushed tag: $NEW_VERSION"
+
+      - name: Tag already exists
+        if: steps.check_tag.outputs.exists == 'true'
+        run: |
+          echo "ℹ️  Tag ${{ steps.calc_version.outputs.new_version }} already exists, skipping"
