@@ -19,7 +19,9 @@ func TestAgentStarted(t *testing.T) {
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("Failed to read from pipe: %v", err)
+	}
 
 	var event Event
 	if err := json.Unmarshal(buf.Bytes(), &event); err != nil {
@@ -52,7 +54,9 @@ func TestAgentCompleted(t *testing.T) {
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("Failed to read from pipe: %v", err)
+	}
 
 	var event Event
 	if err := json.Unmarshal(buf.Bytes(), &event); err != nil {
@@ -82,7 +86,9 @@ func TestTaskCreated(t *testing.T) {
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("Failed to read from pipe: %v", err)
+	}
 
 	var event Event
 	if err := json.Unmarshal(buf.Bytes(), &event); err != nil {
@@ -109,7 +115,9 @@ func TestTaskUpdated(t *testing.T) {
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("Failed to read from pipe: %v", err)
+	}
 
 	var event Event
 	if err := json.Unmarshal(buf.Bytes(), &event); err != nil {
@@ -136,7 +144,9 @@ func TestProgress(t *testing.T) {
 	os.Stdout = old
 
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("Failed to read from pipe: %v", err)
+	}
 
 	var event Event
 	if err := json.Unmarshal(buf.Bytes(), &event); err != nil {

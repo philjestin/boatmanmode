@@ -34,7 +34,7 @@ type Manager struct {
 // NewManager creates a new tmux session manager.
 func NewManager(prefix string) *Manager {
 	outputDir := filepath.Join(os.TempDir(), "boatman-sessions")
-	os.MkdirAll(outputDir, 0755)
+	_ = os.MkdirAll(outputDir, 0755) // Best effort, failure handled later when writing files
 
 	return &Manager{
 		sessionPrefix: prefix,
@@ -48,8 +48,8 @@ func (m *Manager) CreateSession(name, workDir string) (*Session, error) {
 	outputFile := filepath.Join(m.outputDir, fmt.Sprintf("%s.out", sessionName))
 	doneFile := filepath.Join(m.outputDir, fmt.Sprintf("%s.done", sessionName))
 
-	// Kill existing session if any
-	exec.Command("tmux", "kill-session", "-t", sessionName).Run()
+	// Kill existing session if any (ignore error if session doesn't exist)
+	_ = exec.Command("tmux", "kill-session", "-t", sessionName).Run()
 
 	// Remove old files
 	os.Remove(outputFile)
@@ -69,12 +69,12 @@ func (m *Manager) CreateSession(name, workDir string) (*Session, error) {
 
 	// Set up the session with a clean display
 	time.Sleep(100 * time.Millisecond)
-	m.sendKeys(sessionName, "clear")
+	_ = m.sendKeys(sessionName, "clear")
 	time.Sleep(50 * time.Millisecond)
-	m.sendKeys(sessionName, fmt.Sprintf("echo '🚣 Boatman Agent: %s'", name))
+	_ = m.sendKeys(sessionName, fmt.Sprintf("echo '🚣 Boatman Agent: %s'", name))
 	time.Sleep(50 * time.Millisecond)
 	if workDir != "" {
-		m.sendKeys(sessionName, fmt.Sprintf("echo '📁 %s'", workDir))
+		_ = m.sendKeys(sessionName, fmt.Sprintf("echo '📁 %s'", workDir))
 		time.Sleep(50 * time.Millisecond)
 	}
 	m.sendKeys(sessionName, "echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'")
@@ -345,8 +345,8 @@ func (m *Manager) waitAndCapture(ctx context.Context, sess *Session) (string, *c
 					return "", nil, fmt.Errorf("failed to capture output: %w", err)
 				}
 
-				// Save for debugging
-				os.WriteFile(sess.OutputFile, []byte(output), 0644)
+				// Save for debugging (best effort, ignore errors)
+				_ = os.WriteFile(sess.OutputFile, []byte(output), 0644)
 
 				// Try to extract actual result and usage from the result file
 				if resultContent, err := os.ReadFile(resultFile); err == nil && len(resultContent) > 0 {

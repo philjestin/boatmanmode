@@ -64,7 +64,9 @@ func main() {
 `
 
 	filePath := filepath.Join(tmpDir, "main.go")
-	os.WriteFile(filePath, []byte(goCode), 0644)
+	if err := os.WriteFile(filePath, []byte(goCode), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New()
 	summary, err := s.SummarizeFile(filePath)
@@ -122,7 +124,9 @@ if __name__ == "__main__":
 `
 
 	filePath := filepath.Join(tmpDir, "main.py")
-	os.WriteFile(filePath, []byte(pythonCode), 0644)
+	if err := os.WriteFile(filePath, []byte(pythonCode), 0644); err != nil {
+		t.Fatal(err)
+	}
 
 	s := New()
 	summary, err := s.SummarizeFile(filePath)
