@@ -90,6 +90,27 @@ boatman work --file ./tasks/authentication.md
 
 See [TASK_MODES.md](TASK_MODES.md) for complete documentation.
 
+### 📡 Event System for External Integration (NEW)
+Real-time JSON event stream for desktop app integration:
+
+```bash
+# Events are automatically emitted to stdout
+boatman work ENG-123 | grep '^{' | jq
+```
+
+**Event Types:**
+- `agent_started` / `agent_completed` - Track each workflow step
+- `progress` - General progress updates
+- `task_created` / `task_updated` - Task lifecycle events (reserved)
+
+**Use Cases:**
+- Desktop app integration ([boatmanapp](https://github.com/philjestin/boatmanapp))
+- Real-time workflow monitoring
+- Custom dashboards and reporting
+- CI/CD pipeline integration
+
+See [EVENTS.md](EVENTS.md) for complete event specification and integration examples.
+
 ---
 
 ### 🚀 Pre-flight Validation Agent

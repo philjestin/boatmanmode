@@ -16,6 +16,7 @@ import (
 	"github.com/philjestin/boatmanmode/internal/coordinator"
 	"github.com/philjestin/boatmanmode/internal/cost"
 	"github.com/philjestin/boatmanmode/internal/diffverify"
+	"github.com/philjestin/boatmanmode/internal/events"
 	"github.com/philjestin/boatmanmode/internal/executor"
 	"github.com/philjestin/boatmanmode/internal/github"
 	"github.com/philjestin/boatmanmode/internal/handoff"
@@ -141,6 +142,9 @@ func (a *Agent) Work(ctx context.Context, t task.Task) (*WorkResult, error) {
 
 // stepPrepareTask displays task information (Step 1).
 func (a *Agent) stepPrepareTask(ctx context.Context, wc *workContext) error {
+	agentID := fmt.Sprintf("prepare-%s", wc.task.GetID())
+	events.AgentStarted(agentID, "Preparing Task", fmt.Sprintf("Preparing task %s", wc.task.GetID()))
+
 	printStep(1, 9, "Preparing task")
 	fmt.Printf("   🎫 Task ID: %s\n", wc.task.GetID())
 
@@ -158,21 +162,27 @@ func (a *Agent) stepPrepareTask(ctx context.Context, wc *workContext) error {
 	printIndented(truncate(wc.task.GetDescription(), 800), "      ")
 	fmt.Println()
 
+	events.AgentCompleted(agentID, "Preparing Task", "success")
 	return nil
 }
 
 // stepSetupWorktree creates a git worktree for the task (Step 2).
 func (a *Agent) stepSetupWorktree(ctx context.Context, wc *workContext) error {
+	agentID := fmt.Sprintf("worktree-%s", wc.task.GetID())
+	events.AgentStarted(agentID, "Setup Worktree", "Creating isolated git worktree")
+
 	printStep(2, 9, "Setting up git worktree")
 
 	repoPath, err := os.Getwd()
 	if err != nil {
+		events.AgentCompleted(agentID, "Setup Worktree", "failed")
 		return fmt.Errorf("failed to get working directory: %w", err)
 	}
 	fmt.Printf("   📂 Repo: %s\n", repoPath)
 
 	wtManager, err := worktree.New(repoPath)
 	if err != nil {
+		events.AgentCompleted(agentID, "Setup Worktree", "failed")
 		return fmt.Errorf("failed to create worktree manager: %w", err)
 	}
 
@@ -181,6 +191,7 @@ func (a *Agent) stepSetupWorktree(ctx context.Context, wc *workContext) error {
 
 	wt, err := wtManager.Create(branchName, a.config.BaseBranch)
 	if err != nil {
+		events.AgentCompleted(agentID, "Setup Worktree", "failed")
 		return fmt.Errorf("failed to create worktree: %w", err)
 	}
 	fmt.Printf("   📁 Worktree: %s\n", wt.Path)
@@ -193,11 +204,15 @@ func (a *Agent) stepSetupWorktree(ctx context.Context, wc *workContext) error {
 	wc.pinner = contextpin.New(wt.Path)
 	wc.pinner.SetCoordinator(a.coordinator)
 
+	events.AgentCompleted(agentID, "Setup Worktree", "success")
 	return nil
 }
 
 // stepPlanning runs the planning agent to analyze the task (Step 3).
 func (a *Agent) stepPlanning(ctx context.Context, wc *workContext) error {
+	agentID := fmt.Sprintf("planning-%s", wc.task.GetID())
+	events.AgentStarted(agentID, "Planning & Analysis", "Analyzing codebase and creating implementation plan")
+
 	printStep(3, 9, "Planning & analysis (parallel)")
 
 	var wg sync.WaitGroup
@@ -209,12 +224,14 @@ func (a *Agent) stepPlanning(ctx context.Context, wc *workContext) error {
 		plan, usage, err := planAgent.Analyze(ctx, wc.task)
 		if err != nil {
 			fmt.Printf("   ⚠️  Planning failed: %v (continuing without plan)\n", err)
+			events.AgentCompleted(agentID, "Planning & Analysis", "failed")
 			return
 		}
 		wc.plan = plan
 		if usage != nil {
 			wc.costTracker.Add("Planning", *usage)
 		}
+		events.AgentCompleted(agentID, "Planning & Analysis", "success")
 	}()
 
 	wg.Wait()
@@ -225,11 +242,15 @@ func (a *Agent) stepPlanning(ctx context.Context, wc *workContext) error {
 
 // stepPreflightValidation validates the plan before execution (Step 4).
 func (a *Agent) stepPreflightValidation(ctx context.Context, wc *workContext) error {
+	agentID := fmt.Sprintf("preflight-%s", wc.task.GetID())
+	events.AgentStarted(agentID, "Pre-flight Validation", "Validating implementation plan")
+
 	printStep(4, 9, "Pre-flight validation")
 
 	if wc.plan == nil {
 		fmt.Println("   ⏭️  Skipping (no plan)")
 		fmt.Println()
+		events.AgentCompleted(agentID, "Pre-flight Validation", "success")
 		return nil
 	}
 
@@ -238,6 +259,7 @@ func (a *Agent) stepPreflightValidation(ctx context.Context, wc *workContext) er
 	validation, err := preflightAgent.Validate(ctx, wc.plan)
 	if err != nil {
 		fmt.Printf("   ⚠️  Validation error: %v\n", err)
+		events.AgentCompleted(agentID, "Pre-flight Validation", "failed")
 	} else {
 		fmt.Printf("   %s\n", (&preflight.ValidationHandoff{Result: validation}).Concise())
 		if !validation.Valid {
@@ -249,6 +271,7 @@ func (a *Agent) stepPreflightValidation(ctx context.Context, wc *workContext) er
 		for _, w := range validation.Warnings {
 			fmt.Printf("      ⚠️  %s\n", w.Message)
 		}
+		events.AgentCompleted(agentID, "Pre-flight Validation", "success")
 	}
 
 	// Pin files from the plan for context consistency
@@ -266,11 +289,15 @@ func (a *Agent) stepPreflightValidation(ctx context.Context, wc *workContext) er
 
 // stepExecute runs the executor to implement the task (Step 5).
 func (a *Agent) stepExecute(ctx context.Context, wc *workContext) error {
+	agentID := fmt.Sprintf("execute-%s", wc.task.GetID())
+	events.AgentStarted(agentID, "Execution", "Implementing code changes")
+
 	printStep(5, 9, "Executing development task")
 
 	wc.exec = executor.New(wc.worktree.Path, a.config)
 	result, usage, err := wc.exec.ExecuteWithPlan(ctx, wc.task, wc.plan)
 	if err != nil {
+		events.AgentCompleted(agentID, "Execution", "failed")
 		return fmt.Errorf("execution failed: %w", err)
 	}
 
@@ -279,6 +306,7 @@ func (a *Agent) stepExecute(ctx context.Context, wc *workContext) error {
 	}
 
 	if !result.Success {
+		events.AgentCompleted(agentID, "Execution", "failed")
 		return fmt.Errorf("execution failed: %v", result.Error)
 	}
 
@@ -288,14 +316,19 @@ func (a *Agent) stepExecute(ctx context.Context, wc *workContext) error {
 	// Stage changes
 	fmt.Println("   📥 Staging changes...")
 	if err := wc.exec.StageChanges(); err != nil {
+		events.AgentCompleted(agentID, "Execution", "failed")
 		return fmt.Errorf("failed to stage changes: %w", err)
 	}
 
+	events.AgentCompleted(agentID, "Execution", "success")
 	return nil
 }
 
 // stepTestAndReview runs tests and initial review in parallel (Step 6).
 func (a *Agent) stepTestAndReview(ctx context.Context, wc *workContext) error {
+	testAgentID := fmt.Sprintf("test-%s", wc.task.GetID())
+	reviewAgentID := fmt.Sprintf("review-1-%s", wc.task.GetID())
+
 	printStep(6, 9, "Running tests & initial review (parallel)")
 
 	// Get diff for review
@@ -310,20 +343,32 @@ func (a *Agent) stepTestAndReview(ctx context.Context, wc *workContext) error {
 	// Run tests in parallel
 	go func() {
 		defer wg.Done()
+		events.AgentStarted(testAgentID, "Running Tests", "Running unit tests for changed files")
 		testAgent := testrunner.New(wc.worktree.Path)
 		testAgent.SetCoordinator(a.coordinator)
 		wc.testResult, _ = testAgent.RunForFiles(ctx, wc.execResult.FilesChanged)
+		if wc.testResult != nil && wc.testResult.Passed {
+			events.AgentCompleted(testAgentID, "Running Tests", "success")
+		} else {
+			events.AgentCompleted(testAgentID, "Running Tests", "failed")
+		}
 	}()
 
 	// Run initial review in parallel
 	go func() {
 		defer wg.Done()
+		events.AgentStarted(reviewAgentID, "Code Review #1", "Reviewing code quality and best practices")
 		reviewHandoff := handoff.NewReviewHandoff(wc.task, initialDiff, wc.execResult.FilesChanged)
 		reviewer := scottbott.NewWithSkill(wc.worktree.Path, 1, a.config.ReviewSkill, a.config)
 		reviewResult, usage, _ := reviewer.Review(ctx, reviewHandoff.Concise(), initialDiff)
 		wc.reviewResult = reviewResult
 		if usage != nil {
 			wc.costTracker.Add("Review #1", *usage)
+		}
+		if reviewResult != nil && reviewResult.Passed {
+			events.AgentCompleted(reviewAgentID, "Code Review #1", "success")
+		} else {
+			events.AgentCompleted(reviewAgentID, "Code Review #1", "failed")
 		}
 	}()
 
@@ -353,6 +398,8 @@ func (a *Agent) stepRefactorLoop(ctx context.Context, wc *workContext) error {
 		wc.iterations++
 		fmt.Printf("\n   🔄 Iteration %d of %d\n", wc.iterations, a.config.MaxIterations)
 		fmt.Println("   ─────────────────────────────")
+
+		events.Progress(fmt.Sprintf("Review & refactor iteration %d of %d", wc.iterations, a.config.MaxIterations))
 
 		// Use existing review for first iteration, get fresh review for subsequent
 		if wc.iterations > 1 || wc.reviewResult == nil {
@@ -425,6 +472,9 @@ func (a *Agent) doReview(ctx context.Context, wc *workContext, previousDiff *str
 
 // doRefactor performs refactoring based on review feedback.
 func (a *Agent) doRefactor(ctx context.Context, wc *workContext, previousDiff string) error {
+	refactorAgentID := fmt.Sprintf("refactor-%d-%s", wc.iterations, wc.task.GetID())
+	events.AgentStarted(refactorAgentID, fmt.Sprintf("Refactoring #%d", wc.iterations), "Applying code review feedback")
+
 	fmt.Printf("   🔧 Refactoring (attempt %d)...\n", wc.iterations)
 
 	refactorExec := executor.NewRefactorExecutor(wc.worktree.Path, wc.iterations, a.config)
@@ -444,6 +494,7 @@ func (a *Agent) doRefactor(ctx context.Context, wc *workContext, previousDiff st
 
 	refactorResult, usage, err := refactorExec.RefactorWithHandoff(ctx, refactorHandoff)
 	if err != nil {
+		events.AgentCompleted(refactorAgentID, fmt.Sprintf("Refactoring #%d", wc.iterations), "failed")
 		return fmt.Errorf("refactor failed: %w", err)
 	}
 
@@ -468,20 +519,26 @@ func (a *Agent) doRefactor(ctx context.Context, wc *workContext, previousDiff st
 	wc.execResult.FilesChanged = refactorResult.FilesChanged
 
 	if !refactorResult.Success {
+		events.AgentCompleted(refactorAgentID, fmt.Sprintf("Refactoring #%d", wc.iterations), "failed")
 		return fmt.Errorf("refactor failed: %v", refactorResult.Error)
 	}
 
 	// Stage new changes
 	fmt.Println("   📥 Staging refactored changes...")
 	if err := wc.exec.StageChanges(); err != nil {
+		events.AgentCompleted(refactorAgentID, fmt.Sprintf("Refactoring #%d", wc.iterations), "failed")
 		return fmt.Errorf("failed to stage changes: %w", err)
 	}
 
+	events.AgentCompleted(refactorAgentID, fmt.Sprintf("Refactoring #%d", wc.iterations), "success")
 	return nil
 }
 
 // stepCommitAndPush commits and pushes changes (Step 8).
 func (a *Agent) stepCommitAndPush(ctx context.Context, wc *workContext) error {
+	agentID := fmt.Sprintf("commit-%s", wc.task.GetID())
+	events.AgentStarted(agentID, "Commit & Push", "Committing and pushing changes to remote")
+
 	printStep(8, 9, "Committing and pushing")
 
 	commitMsg := fmt.Sprintf("feat(%s): %s\n\n%s",
@@ -493,20 +550,26 @@ func (a *Agent) stepCommitAndPush(ctx context.Context, wc *workContext) error {
 	fmt.Printf("   📝 Message: %s\n", strings.Split(commitMsg, "\n")[0])
 
 	if err := wc.exec.Commit(commitMsg); err != nil {
+		events.AgentCompleted(agentID, "Commit & Push", "failed")
 		return fmt.Errorf("failed to commit: %w", err)
 	}
 
 	fmt.Println("   📤 Pushing to origin...")
 	if err := wc.exec.Push(wc.branchName); err != nil {
+		events.AgentCompleted(agentID, "Commit & Push", "failed")
 		return fmt.Errorf("failed to push: %w", err)
 	}
 	fmt.Println()
 
+	events.AgentCompleted(agentID, "Commit & Push", "success")
 	return nil
 }
 
 // stepCreatePR creates a pull request (Step 9).
 func (a *Agent) stepCreatePR(ctx context.Context, wc *workContext) (*WorkResult, error) {
+	agentID := fmt.Sprintf("pr-%s", wc.task.GetID())
+	events.AgentStarted(agentID, "Create PR", "Creating pull request")
+
 	printStep(9, 9, "Creating pull request")
 
 	// Format PR body based on task source
@@ -583,9 +646,11 @@ func (a *Agent) stepCreatePR(ctx context.Context, wc *workContext) (*WorkResult,
 	fmt.Println("   🔗 Running: gh pr create")
 	prResult, err := github.CreatePRInDir(ctx, wc.worktree.Path, wc.task.GetTitle(), prBody, a.config.BaseBranch)
 	if err != nil {
+		events.AgentCompleted(agentID, "Create PR", "failed")
 		return nil, fmt.Errorf("failed to create PR: %w", err)
 	}
 
+	events.AgentCompleted(agentID, "Create PR", "success")
 	a.printWorkflowSummary(wc, prResult.URL)
 
 	return &WorkResult{
