@@ -223,12 +223,71 @@ Intelligent model selection and prompt caching to reduce API costs by 50-90%:
 
 #### Multi-Model Strategy
 - **Smart model selection** per agent type for optimal cost/performance
-- **Sonnet 4.5** for complex tasks (planning, code generation, review)
-- **Haiku 4** for simple tasks (validation, test parsing) - **90% cheaper**
 - **Configurable per agent** via `claude.models` in config
 - **Example savings**: Preflight + test parsing with Haiku saves ~$0.50 per ticket
 
-**Combined impact**: Using both features can reduce per-ticket costs from ~$2-3 to ~$0.50-1.00 while maintaining quality.
+### 🧠 Model Configuration
+
+Each agent in the workflow can use a different Claude model. Set the model for each agent type in your `.boatman.yaml` under `claude.models`:
+
+```yaml
+claude:
+  models:
+    planner: claude-opus-4-6         # Model for planning & codebase analysis
+    executor: claude-opus-4-6        # Model for code generation
+    reviewer: claude-opus-4-6        # Model for quality review
+    refactor: claude-opus-4-6        # Model for fixing review issues
+    preflight: claude-haiku-4        # Model for fast validation
+    test_runner: claude-haiku-4      # Model for test output parsing
+```
+
+#### Available Models
+
+| Model | ID | Best For |
+|-------|----|----------|
+| **Claude Opus 4.6** | `claude-opus-4-6` | Highest quality — complex planning, nuanced code generation, thorough review |
+| **Claude Sonnet 4.5** | `claude-sonnet-4.5` | Good balance of quality and cost |
+| **Claude Haiku 4** | `claude-haiku-4` | Fast, cheap — simple validation and parsing tasks |
+
+#### Example Configurations
+
+**Maximum quality** (use Opus for all complex agents):
+```yaml
+claude:
+  models:
+    planner: claude-opus-4-6
+    executor: claude-opus-4-6
+    reviewer: claude-opus-4-6
+    refactor: claude-opus-4-6
+    preflight: claude-haiku-4
+    test_runner: claude-haiku-4
+```
+
+**Balanced** (Sonnet for most tasks, Haiku for simple ones):
+```yaml
+claude:
+  models:
+    planner: claude-sonnet-4.5
+    executor: claude-sonnet-4.5
+    reviewer: claude-sonnet-4.5
+    refactor: claude-sonnet-4.5
+    preflight: claude-haiku-4
+    test_runner: claude-haiku-4
+```
+
+**Cost-optimized** (Haiku everywhere possible):
+```yaml
+claude:
+  models:
+    planner: claude-sonnet-4.5
+    executor: claude-sonnet-4.5
+    reviewer: claude-haiku-4
+    refactor: claude-haiku-4
+    preflight: claude-haiku-4
+    test_runner: claude-haiku-4
+```
+
+If a model field is left empty or omitted, the Claude CLI's default model is used.
 
 ---
 
@@ -347,6 +406,8 @@ claude:
   enable_prompt_caching: true        # Enable prompt caching (reduces costs 50-90%)
 
   # Multi-model strategy: Use different models per agent type
+  # Available models: claude-opus-4-6, claude-sonnet-4.5, claude-haiku-4
+  # See "Model Configuration" section below for details and examples
   models:
     planner: claude-sonnet-4.5       # Complex planning & codebase analysis
     executor: claude-sonnet-4.5      # Code generation

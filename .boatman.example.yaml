@@ -19,6 +19,25 @@ review:
   min_verification_confidence: 50   # Min confidence % for diff verification (default: 50)
   strict_parsing: false            # Enable strict keyword parsing for reviews (default: false)
 
+# Claude CLI settings
+claude:
+  command: claude                     # Claude CLI command
+  use_tmux: false                     # Use tmux for large prompts
+  large_prompt_threshold: 100000      # Character count for tmux
+  timeout: 0                          # 0 = no timeout
+  enable_prompt_caching: true         # Enable prompt caching (reduces costs 50-90%)
+
+  # Multi-model strategy: Use different models per agent type
+  # Available models: claude-opus-4-6, claude-sonnet-4.5, claude-haiku-4
+  # Leave empty to use the Claude CLI default model
+  models:
+    planner: claude-sonnet-4.5       # Complex planning & codebase analysis
+    executor: claude-sonnet-4.5      # Code generation
+    reviewer: claude-sonnet-4.5      # Quality review
+    refactor: claude-sonnet-4.5      # Fixing review issues
+    preflight: claude-haiku-4        # Fast validation (90% cheaper)
+    test_runner: claude-haiku-4      # Simple test output parsing (90% cheaper)
+
 # Prerequisites (no config needed - just make sure they're installed & auth'd):
 # - claude CLI (authenticated via gcloud / Vertex AI)
 # - gh CLI (authenticated via `gh auth login`)
