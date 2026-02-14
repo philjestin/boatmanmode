@@ -4,6 +4,9 @@
 # Linear API key (or set LINEAR_API_KEY env var)
 # linear_key: lin_api_xxxxx
 
+# Claude CLI tools (enables agent tool capabilities)
+enable_tools: true     # Enable Claude CLI tool capabilities (default: true)
+
 # Workflow settings
 max_iterations: 5      # Max review/refactor cycles before giving up (default: 5)
 base_branch: main      # Base branch for worktrees

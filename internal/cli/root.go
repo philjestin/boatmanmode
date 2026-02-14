@@ -58,6 +58,12 @@ func initConfig() {
 	viper.SetEnvPrefix("BOATMAN")
 	viper.AutomaticEnv()
 
-	viper.ReadInConfig()
+	if err := viper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			// Config file was found but another error occurred (likely YAML syntax error)
+			cobra.CheckErr(err)
+		}
+		// Config file not found is OK - will use defaults
+	}
 }
 

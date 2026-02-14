@@ -145,7 +145,7 @@ func Load() (*Config, error) {
 		AutoPR:        viper.GetBool("auto_pr"),
 		ReviewSkill:   getStringOrDefault("review_skill", "peer-review"),
 		Debug:         os.Getenv("BOATMAN_DEBUG") == "1",
-		EnableTools:   viper.GetBool("enable_tools"),
+		EnableTools:   getBoolOrDefault("enable_tools", true),
 
 		Review: ReviewConfig{
 			MaxCriticalIssues:         getIntOrDefault("review.max_critical_issues", 1),    // Allow 1 critical (was 0)
