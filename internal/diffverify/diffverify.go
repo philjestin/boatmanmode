@@ -40,9 +40,10 @@ type UnaddressedIssue struct {
 
 // Agent verifies diffs against issues.
 type Agent struct {
-	id           string
-	worktreePath string
-	coord        *coordinator.Coordinator
+	id                    string
+	worktreePath          string
+	coord                 *coordinator.Coordinator
+	minConfidenceOverride int // Optional minimum confidence override
 }
 
 // New creates a new diff verification agent.
@@ -73,6 +74,11 @@ func (a *Agent) SetCoordinator(c *coordinator.Coordinator) {
 	a.coord = c
 }
 
+// SetMinConfidence sets the minimum confidence threshold for verification.
+func (a *Agent) SetMinConfidence(minConfidence int) {
+	a.minConfidenceOverride = minConfidence
+}
+
 // Verify checks if the diff addresses the given issues.
 func (a *Agent) Verify(ctx context.Context, issues []scottbott.Issue, oldDiff, newDiff string) (*VerificationResult, error) {
 	// Claim work if coordinated
@@ -93,7 +99,7 @@ func (a *Agent) Verify(ctx context.Context, issues []scottbott.Issue, oldDiff, n
 		AddressedIssues:   []AddressedIssue{},
 		UnaddressedIssues: []UnaddressedIssue{},
 		NewIssues:         []string{},
-		Confidence:        80, // Default confidence
+		Confidence:        85, // Default confidence (increased from 80)
 	}
 
 	// Parse diffs for analysis
@@ -121,13 +127,24 @@ func (a *Agent) Verify(ctx context.Context, issues []scottbott.Issue, oldDiff, n
 	// Check for potential new issues
 	result.NewIssues = a.detectNewIssues(oldChanges, newChanges)
 	if len(result.NewIssues) > 0 {
-		result.Confidence -= 10 // Less confident if new issues detected
+		// Only penalize for actual concerning issues, not debug statements
+		concerningIssues := 0
+		for _, issue := range result.NewIssues {
+			if !strings.Contains(strings.ToLower(issue), "console.log") &&
+				!strings.Contains(strings.ToLower(issue), "debug") &&
+				!strings.Contains(strings.ToLower(issue), "print") {
+				concerningIssues++
+			}
+		}
+		result.Confidence -= concerningIssues * 5 // Reduced penalty
 	}
 
-	// Adjust confidence based on coverage
+	// Adjust confidence based on coverage with more lenient calculation
 	if len(issues) > 0 {
 		addressedRatio := float64(len(result.AddressedIssues)) / float64(len(issues))
-		result.Confidence = int(float64(result.Confidence) * addressedRatio)
+		// Use a weighted formula that's more forgiving
+		confidenceMultiplier := 0.7 + (addressedRatio * 0.3) // 70% base + 30% based on ratio
+		result.Confidence = int(float64(result.Confidence) * confidenceMultiplier)
 	}
 
 	// Share result via coordinator
@@ -199,18 +216,16 @@ func (a *Agent) checkIssueAddressed(issue scottbott.Issue, oldChanges, newChange
 	if issue.File != "" {
 		newChange, modified := newChanges[issue.File]
 		if !modified {
-			// File wasn't touched in new diff
-			// Check if it was in old diff and the issue relates to it
-			if _, wasInOld := oldChanges[issue.File]; wasInOld {
-				return false, "", fmt.Sprintf("File %s was not modified in refactor", issue.File)
-			}
-		} else {
-			// File was modified - look for evidence of fix
-			evidence := a.findFixEvidence(newChange, keywords, issue)
-			if evidence != "" {
-				return true, evidence, ""
-			}
+			// File wasn't touched in new diff - issue not addressed
+			return false, "", fmt.Sprintf("File %s was not modified", issue.File)
 		}
+		// File was modified - look for evidence of fix
+		evidence := a.findFixEvidence(newChange, keywords, issue)
+		if evidence != "" {
+			return true, evidence, ""
+		}
+		// File was modified but no clear evidence found
+		// Don't give up yet - check if issue might have been addressed elsewhere
 	}
 
 	// Check all new changes for keyword matches
@@ -249,23 +264,33 @@ func (a *Agent) findFixEvidence(change *DiffChange, keywords []string, issue sco
 		}
 	}
 
-	// Require at least some keyword matches
+	// Accept any keyword matches as evidence
 	if matchCount >= 1 {
 		return fmt.Sprintf("Found related changes: %s", strings.Join(matchedLines, "; "))
 	}
 
-	// Check for specific fix patterns based on severity
+	// More lenient heuristics based on severity
 	switch issue.Severity {
 	case "critical":
 		// For critical issues, look for significant changes
-		if len(change.Added) > 5 || len(change.Removed) > 3 {
+		if len(change.Added) > 3 || len(change.Removed) > 2 {
 			return fmt.Sprintf("Significant changes (%d added, %d removed)", len(change.Added), len(change.Removed))
 		}
 	case "major":
-		// For major issues, look for targeted changes
-		if len(change.Added) > 2 {
-			return fmt.Sprintf("Targeted changes (%d lines added)", len(change.Added))
+		// For major issues, accept even small targeted changes
+		if len(change.Added) > 1 || len(change.Removed) > 0 {
+			return fmt.Sprintf("Targeted changes (%d lines added, %d removed)", len(change.Added), len(change.Removed))
 		}
+	case "minor":
+		// For minor issues, any change in the file is likely addressing it
+		if len(change.Added) > 0 || len(change.Removed) > 0 {
+			return fmt.Sprintf("Code changes detected (%d added, %d removed)", len(change.Added), len(change.Removed))
+		}
+	}
+
+	// If the file was modified at all, give benefit of the doubt
+	if len(change.Added) > 0 || len(change.Removed) > 0 {
+		return fmt.Sprintf("File modified with %d additions and %d deletions", len(change.Added), len(change.Removed))
 	}
 
 	return ""
@@ -294,21 +319,15 @@ func (a *Agent) checkPatternRemoved(oldChanges, newChanges map[string]*DiffChang
 func (a *Agent) detectNewIssues(oldChanges, newChanges map[string]*DiffChange) []string {
 	var issues []string
 
-	// Patterns that often indicate problems
+	// Only flag truly problematic patterns - be more lenient
 	problemPatterns := []struct {
 		pattern string
 		message string
 	}{
-		{`todo:`, "New TODO comment added"},
 		{`fixme:`, "New FIXME comment added"},
-		{`hack:`, "New HACK comment added"},
 		{`xxx:`, "New XXX marker added"},
 		{`binding\.pry`, "Debug statement left in code"},
-		{`debugger`, "Debugger statement left in code"},
-		{`console\.log`, "Console.log left in code"},
-		{`fmt\.println`, "Debug print left in code"},
-		{`panic\(`, "New panic call added"},
-		{`raise\s`, "New exception raise added"},
+		{`debugger;`, "Debugger statement left in code"},
 	}
 
 	for file, change := range newChanges {

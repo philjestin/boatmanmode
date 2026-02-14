@@ -43,6 +43,7 @@ type ScottBott struct {
 	skill               string
 	model               string
 	enablePromptCaching bool
+	cfg                 *config.Config
 }
 
 // New creates a new ScottBott instance.
@@ -53,6 +54,7 @@ func New(cfg *config.Config) *ScottBott {
 		skill:               cfg.ReviewSkill,
 		model:               cfg.Claude.Models.Reviewer,
 		enablePromptCaching: cfg.Claude.EnablePromptCaching,
+		cfg:                 cfg,
 	}
 }
 
@@ -64,6 +66,7 @@ func NewForIteration(iteration int, cfg *config.Config) *ScottBott {
 		skill:               cfg.ReviewSkill,
 		model:               cfg.Claude.Models.Reviewer,
 		enablePromptCaching: cfg.Claude.EnablePromptCaching,
+		cfg:                 cfg,
 	}
 }
 
@@ -76,6 +79,7 @@ func NewWithWorkDir(workDir string, iteration int, cfg *config.Config) *ScottBot
 		skill:               cfg.ReviewSkill,
 		model:               cfg.Claude.Models.Reviewer,
 		enablePromptCaching: cfg.Claude.EnablePromptCaching,
+		cfg:                 cfg,
 	}
 }
 
@@ -91,6 +95,7 @@ func NewWithSkill(workDir string, iteration int, skill string, cfg *config.Confi
 		skill:               skill,
 		model:               cfg.Claude.Models.Reviewer,
 		enablePromptCaching: cfg.Claude.EnablePromptCaching,
+		cfg:                 cfg,
 	}
 }
 
@@ -157,7 +162,7 @@ func (s *ScottBott) Review(ctx context.Context, ticketContext, diff string) (*Re
 
 	// Parse the response
 	response := strings.TrimSpace(string(output))
-	result, err := parseReviewResponse(response)
+	result, err := s.parseReviewResponse(response)
 	// Text output format doesn't include usage data
 	return result, nil, err
 }
@@ -211,7 +216,7 @@ Pass if: no critical issues, ≤2 major issues, code meets requirements.`
 
 	fmt.Printf("   ⏱️  Review completed in %s\n", elapsed.Round(time.Second))
 
-	result, err := parseReviewResponse(strings.TrimSpace(string(output)))
+	result, err := s.parseReviewResponse(strings.TrimSpace(string(output)))
 	// Text output format doesn't include usage data
 	return result, nil, err
 }
@@ -228,7 +233,7 @@ Review these changes against the requirements. Provide your assessment.`, ticket
 }
 
 // parseReviewResponse extracts ReviewResult from Claude's response.
-func parseReviewResponse(response string) (*ReviewResult, error) {
+func (s *ScottBott) parseReviewResponse(response string) (*ReviewResult, error) {
 	// First try JSON extraction
 	jsonStr := extractJSON(response)
 
@@ -238,11 +243,11 @@ func parseReviewResponse(response string) (*ReviewResult, error) {
 	}
 
 	// If JSON parsing fails, parse natural language response
-	return parseNaturalLanguageReview(response)
+	return s.parseNaturalLanguageReview(response)
 }
 
 // parseNaturalLanguageReview extracts review info from a natural language response.
-func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
+func (s *ScottBott) parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 	lower := strings.ToLower(response)
 
 	result := &ReviewResult{
@@ -262,15 +267,24 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 		result.Score = 85
 	}
 
-	// Look for explicit fail indicators
-	if strings.Contains(lower, "must be addressed") ||
-		strings.Contains(lower, "blocking") ||
-		strings.Contains(lower, "critical issue") ||
-		strings.Contains(lower, "cannot be merged") ||
-		strings.Contains(lower, "needs work") ||
-		strings.Contains(lower, "issues that need to be addressed") {
-		result.Passed = false
-		result.Score = 50
+	// Look for explicit fail indicators - only if strict parsing is enabled
+	if s.cfg != nil && s.cfg.Review.StrictParsing {
+		if strings.Contains(lower, "must be addressed") ||
+			strings.Contains(lower, "blocking") ||
+			strings.Contains(lower, "critical issue") ||
+			strings.Contains(lower, "cannot be merged") ||
+			strings.Contains(lower, "needs work") ||
+			strings.Contains(lower, "issues that need to be addressed") {
+			result.Passed = false
+			result.Score = 50
+		}
+	} else {
+		// In relaxed mode, only fail on very explicit blocking language
+		if strings.Contains(lower, "cannot be merged") ||
+			strings.Contains(lower, "blocking issue") {
+			result.Passed = false
+			result.Score = 50
+		}
 	}
 
 	// Extract summary - first paragraph or first 300 chars
@@ -352,7 +366,15 @@ func parseNaturalLanguageReview(response string) (*ReviewResult, error) {
 		}
 	}
 
-	if criticalCount > 0 || majorCount > 2 {
+	// Use configurable thresholds or defaults
+	maxCritical := 1
+	maxMajor := 3
+	if s.cfg != nil {
+		maxCritical = s.cfg.Review.MaxCriticalIssues
+		maxMajor = s.cfg.Review.MaxMajorIssues
+	}
+
+	if criticalCount > maxCritical || majorCount > maxMajor {
 		result.Passed = false
 		result.Score = 40 + (10 - criticalCount*10 - majorCount*5)
 		if result.Score < 20 {

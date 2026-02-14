@@ -45,6 +45,17 @@ func AgentCompleted(id, name, status string) {
 	})
 }
 
+// AgentCompletedWithData emits an event when an agent finishes execution with additional metadata.
+func AgentCompletedWithData(id, name, status string, data map[string]any) {
+	Emit(Event{
+		Type:   "agent_completed",
+		ID:     id,
+		Name:   name,
+		Status: status,
+		Data:   data,
+	})
+}
+
 // TaskCreated emits an event when a task is created.
 func TaskCreated(id, name, description string) {
 	Emit(Event{

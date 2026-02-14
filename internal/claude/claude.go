@@ -58,6 +58,10 @@ type Client struct {
 	// EnableTools controls whether tools are enabled at all.
 	// If false, tools are explicitly disabled with --tools "".
 	EnableTools bool
+
+	// SkipPermissions automatically approves all tool uses without user confirmation.
+	// WARNING: This is a security risk - only enable for trusted, non-interactive environments.
+	SkipPermissions bool
 }
 
 // StreamChunk represents a chunk from Claude's stream-json output.
@@ -216,6 +220,11 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 		"--output-format", "stream-json",
 	}
 
+	// Auto-approve tool uses if configured (WARNING: security risk)
+	if c.SkipPermissions {
+		args = append(args, "--dangerously-skip-permissions")
+	}
+
 	// Handle tool permissions
 	if !c.EnableTools {
 		// Explicitly disable tools for backward compatibility
@@ -246,7 +255,8 @@ func (c *Client) doStreamingRequest(ctx context.Context, systemPrompt, userPromp
 		cmd.Dir = c.WorkDir
 	}
 
-	cmd.Env = os.Environ()
+	// Get parent environment but filter out CLAUDECODE to allow nested Claude sessions
+	cmd.Env = filterParentEnv()
 	for k, v := range c.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -409,7 +419,8 @@ func (c *Client) messageNonStreaming(ctx context.Context, systemPrompt, userProm
 		cmd.Dir = c.WorkDir
 	}
 
-	cmd.Env = os.Environ()
+	// Get parent environment but filter out CLAUDECODE to allow nested Claude sessions
+	cmd.Env = filterParentEnv()
 	for k, v := range c.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -463,7 +474,8 @@ func (c *Client) MessageWithFiles(ctx context.Context, systemPrompt, userPrompt 
 		cmd.Dir = c.WorkDir
 	}
 
-	cmd.Env = os.Environ()
+	// Get parent environment but filter out CLAUDECODE to allow nested Claude sessions
+	cmd.Env = filterParentEnv()
 	for k, v := range c.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
@@ -478,6 +490,19 @@ func (c *Client) MessageWithFiles(ctx context.Context, systemPrompt, userPrompt 
 
 	// Text output format doesn't include usage data
 	return strings.TrimSpace(stdout.String()), nil, nil
+}
+
+// filterParentEnv returns a filtered copy of the parent environment,
+// removing CLAUDECODE variables to allow nested Claude Code sessions.
+func filterParentEnv() []string {
+	filtered := make([]string, 0, len(os.Environ()))
+	for _, env := range os.Environ() {
+		// Skip CLAUDECODE and CLAUDE_CODE_ENTRYPOINT to allow running inside another Claude Code session
+		if !strings.HasPrefix(env, "CLAUDECODE=") && !strings.HasPrefix(env, "CLAUDE_CODE_ENTRYPOINT=") {
+			filtered = append(filtered, env)
+		}
+	}
+	return filtered
 }
 
 func min(a, b int) int {

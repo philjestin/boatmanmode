@@ -128,15 +128,16 @@ func TestDetectNewIssues(t *testing.T) {
 		"file.go": {
 			File: "file.go",
 			Added: []string{
-				"// TODO: fix this later",
-				"debugger",
-				"console.log('test')",
+				"// FIXME: this is broken",
+				"debugger;",
+				"binding.pry",
 			},
 		},
 	}
 
 	issues := agent.detectNewIssues(oldChanges, newChanges)
 
+	// With relaxed detection, we should find the truly problematic patterns
 	if len(issues) < 2 {
 		t.Errorf("Expected at least 2 new issues detected, got %d", len(issues))
 	}

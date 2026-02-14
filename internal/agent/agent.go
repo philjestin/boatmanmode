@@ -231,7 +231,14 @@ func (a *Agent) stepPlanning(ctx context.Context, wc *workContext) error {
 		if usage != nil {
 			wc.costTracker.Add("Planning", *usage)
 		}
-		events.AgentCompleted(agentID, "Planning & Analysis", "success")
+		// Include plan summary in metadata
+		planText := ""
+		if plan != nil {
+			planText = plan.Summary
+		}
+		events.AgentCompletedWithData(agentID, "Planning & Analysis", "success", map[string]any{
+			"plan": planText,
+		})
 	}()
 
 	wg.Wait()
@@ -320,7 +327,11 @@ func (a *Agent) stepExecute(ctx context.Context, wc *workContext) error {
 		return fmt.Errorf("failed to stage changes: %w", err)
 	}
 
-	events.AgentCompleted(agentID, "Execution", "success")
+	// Get diff for metadata
+	diff, _ := wc.exec.GetDiff()
+	events.AgentCompletedWithData(agentID, "Execution", "success", map[string]any{
+		"diff": diff,
+	})
 	return nil
 }
 
@@ -366,9 +377,22 @@ func (a *Agent) stepTestAndReview(ctx context.Context, wc *workContext) error {
 			wc.costTracker.Add("Review #1", *usage)
 		}
 		if reviewResult != nil && reviewResult.Passed {
-			events.AgentCompleted(reviewAgentID, "Code Review #1", "success")
+			feedback := reviewResult.Summary
+			if feedback == "" && len(reviewResult.Issues) > 0 {
+				feedback = fmt.Sprintf("Found %d issues", len(reviewResult.Issues))
+			}
+			events.AgentCompletedWithData(reviewAgentID, "Code Review #1", "success", map[string]any{
+				"feedback": feedback,
+				"issues":   reviewResult.Issues,
+			})
 		} else {
-			events.AgentCompleted(reviewAgentID, "Code Review #1", "failed")
+			feedback := ""
+			if reviewResult != nil {
+				feedback = reviewResult.Summary
+			}
+			events.AgentCompletedWithData(reviewAgentID, "Code Review #1", "failed", map[string]any{
+				"feedback": feedback,
+			})
 		}
 	}()
 
@@ -530,7 +554,11 @@ func (a *Agent) doRefactor(ctx context.Context, wc *workContext, previousDiff st
 		return fmt.Errorf("failed to stage changes: %w", err)
 	}
 
-	events.AgentCompleted(refactorAgentID, fmt.Sprintf("Refactoring #%d", wc.iterations), "success")
+	// Get refactored diff for metadata
+	refactorDiff, _ := wc.exec.GetDiff()
+	events.AgentCompletedWithData(refactorAgentID, fmt.Sprintf("Refactoring #%d", wc.iterations), "success", map[string]any{
+		"refactor_diff": refactorDiff,
+	})
 	return nil
 }
 

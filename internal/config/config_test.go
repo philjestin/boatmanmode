@@ -107,11 +107,25 @@ func TestConfigDefaultValues(t *testing.T) {
 	}
 
 	// Check defaults
-	if cfg.MaxIterations != 3 {
-		t.Errorf("Expected MaxIterations 3, got %d", cfg.MaxIterations)
+	if cfg.MaxIterations != 5 {
+		t.Errorf("Expected MaxIterations 5, got %d", cfg.MaxIterations)
 	}
 	if cfg.BaseBranch != "main" {
 		t.Errorf("Expected BaseBranch 'main', got %s", cfg.BaseBranch)
+	}
+
+	// Review defaults
+	if cfg.Review.MaxCriticalIssues != 1 {
+		t.Errorf("Expected MaxCriticalIssues 1, got %d", cfg.Review.MaxCriticalIssues)
+	}
+	if cfg.Review.MaxMajorIssues != 3 {
+		t.Errorf("Expected MaxMajorIssues 3, got %d", cfg.Review.MaxMajorIssues)
+	}
+	if cfg.Review.MinVerificationConfidence != 50 {
+		t.Errorf("Expected MinVerificationConfidence 50, got %d", cfg.Review.MinVerificationConfidence)
+	}
+	if cfg.Review.StrictParsing != false {
+		t.Errorf("Expected StrictParsing false, got %v", cfg.Review.StrictParsing)
 	}
 
 	// Coordinator defaults

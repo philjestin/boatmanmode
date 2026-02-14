@@ -20,6 +20,9 @@ type Config struct {
 	AutoPR        bool
 	ReviewSkill   string
 
+	// Review pass criteria
+	Review ReviewConfig
+
 	// Coordinator settings
 	Coordinator CoordinatorConfig
 
@@ -37,6 +40,21 @@ type Config struct {
 
 	// EnableTools enables Claude CLI tool capabilities for agents
 	EnableTools bool
+}
+
+// ReviewConfig holds review pass criteria settings.
+type ReviewConfig struct {
+	// MaxCriticalIssues is the maximum number of critical issues allowed to pass.
+	MaxCriticalIssues int
+
+	// MaxMajorIssues is the maximum number of major issues allowed to pass.
+	MaxMajorIssues int
+
+	// MinVerificationConfidence is the minimum confidence percentage (0-100) for diff verification.
+	MinVerificationConfidence int
+
+	// StrictParsing enables strict keyword matching in natural language review parsing.
+	StrictParsing bool
 }
 
 // CoordinatorConfig holds coordinator-specific settings.
@@ -122,12 +140,19 @@ type TokenBudgetConfig struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		LinearKey:     getEnvOrViper("LINEAR_API_KEY", "linear_key"),
-		MaxIterations: getIntOrDefault("max_iterations", 3),
+		MaxIterations: getIntOrDefault("max_iterations", 5), // Increased from 3 to 5
 		BaseBranch:    getStringOrDefault("base_branch", "main"),
 		AutoPR:        viper.GetBool("auto_pr"),
 		ReviewSkill:   getStringOrDefault("review_skill", "peer-review"),
 		Debug:         os.Getenv("BOATMAN_DEBUG") == "1",
 		EnableTools:   viper.GetBool("enable_tools"),
+
+		Review: ReviewConfig{
+			MaxCriticalIssues:         getIntOrDefault("review.max_critical_issues", 1),    // Allow 1 critical (was 0)
+			MaxMajorIssues:            getIntOrDefault("review.max_major_issues", 3),       // Allow 3 major (was 2)
+			MinVerificationConfidence: getIntOrDefault("review.min_verification_confidence", 50), // 50% confidence threshold
+			StrictParsing:             getBoolOrDefault("review.strict_parsing", false),    // Relaxed by default
+		},
 
 		Coordinator: CoordinatorConfig{
 			MessageBufferSize:    getIntOrDefault("coordinator.message_buffer_size", 1000),

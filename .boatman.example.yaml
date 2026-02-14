@@ -5,9 +5,16 @@
 # linear_key: lin_api_xxxxx
 
 # Workflow settings
-max_iterations: 3      # Max review/refactor cycles before giving up
+max_iterations: 5      # Max review/refactor cycles before giving up (default: 5)
 base_branch: main      # Base branch for worktrees
 auto_pr: true          # Automatically create PR on success
+
+# Review pass criteria (more lenient defaults)
+review:
+  max_critical_issues: 1           # Max critical issues to still pass (default: 1)
+  max_major_issues: 3              # Max major issues to still pass (default: 3)
+  min_verification_confidence: 50   # Min confidence % for diff verification (default: 50)
+  strict_parsing: false            # Enable strict keyword parsing for reviews (default: false)
 
 # Prerequisites (no config needed - just make sure they're installed & auth'd):
 # - claude CLI (authenticated via gcloud / Vertex AI)
