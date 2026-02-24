@@ -12,6 +12,13 @@ max_iterations: 5      # Max review/refactor cycles before giving up (default: 5
 base_branch: main      # Base branch for worktrees
 auto_pr: true          # Automatically create PR on success
 
+# Pull request settings (additional flags for `gh pr create`)
+pr:
+  flags:
+    - --draft
+    - --label
+    - AI Generated
+
 # Review pass criteria (more lenient defaults)
 review:
   max_critical_issues: 1           # Max critical issues to still pass (default: 1)
@@ -28,13 +35,13 @@ claude:
   enable_prompt_caching: true         # Enable prompt caching (reduces costs 50-90%)
 
   # Multi-model strategy: Use different models per agent type
-  # Available models: claude-opus-4-6, claude-sonnet-4.5, claude-haiku-4
+  # Available models: claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4
   # Leave empty to use the Claude CLI default model
   models:
-    planner: claude-sonnet-4.5       # Complex planning & codebase analysis
-    executor: claude-sonnet-4.5      # Code generation
-    reviewer: claude-sonnet-4.5      # Quality review
-    refactor: claude-sonnet-4.5      # Fixing review issues
+    planner: claude-sonnet-4-5       # Complex planning & codebase analysis
+    executor: claude-sonnet-4-5      # Code generation
+    reviewer: claude-sonnet-4-5      # Quality review
+    refactor: claude-sonnet-4-5      # Fixing review issues
     preflight: claude-haiku-4        # Fast validation (90% cheaper)
     test_runner: claude-haiku-4      # Simple test output parsing (90% cheaper)
 

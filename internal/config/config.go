@@ -32,6 +32,9 @@ type Config struct {
 	// Claude settings
 	Claude ClaudeConfig
 
+	// Pull request settings
+	PR PRConfig
+
 	// Token budgets
 	TokenBudget TokenBudgetConfig
 
@@ -124,6 +127,12 @@ type ModelConfig struct {
 	TestRunner string
 }
 
+// PRConfig holds pull request creation settings.
+type PRConfig struct {
+	// Flags are additional flags passed to `gh pr create`.
+	Flags []string
+}
+
 // TokenBudgetConfig holds context token budget settings.
 type TokenBudgetConfig struct {
 	// Context is the token budget for context in prompts.
@@ -179,6 +188,10 @@ func Load() (*Config, error) {
 				Preflight:  getStringOrDefault("claude.models.preflight", ""),  // Empty = use CLI default
 				TestRunner: getStringOrDefault("claude.models.test_runner", ""), // Empty = use CLI default
 			},
+		},
+
+		PR: PRConfig{
+			Flags: viper.GetStringSlice("pr.flags"),
 		},
 
 		TokenBudget: TokenBudgetConfig{
