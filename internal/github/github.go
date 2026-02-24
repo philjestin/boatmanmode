@@ -21,13 +21,17 @@ func CreatePR(ctx context.Context, title, body, baseBranch string) (*PRResult, e
 }
 
 // CreatePRInDir creates a pull request using the gh CLI in the specified directory.
-func CreatePRInDir(ctx context.Context, workDir, title, body, baseBranch string) (*PRResult, error) {
-	// Use gh CLI which is already authenticated
-	cmd := exec.CommandContext(ctx, "gh", "pr", "create",
+// Any extra flags are appended directly to the `gh pr create` command.
+func CreatePRInDir(ctx context.Context, workDir, title, body, baseBranch string, extraFlags ...string) (*PRResult, error) {
+	args := []string{"pr", "create",
 		"--title", title,
 		"--body", body,
 		"--base", baseBranch,
-	)
+	}
+
+	args = append(args, extraFlags...)
+
+	cmd := exec.CommandContext(ctx, "gh", args...)
 
 	if workDir != "" {
 		cmd.Dir = workDir
@@ -41,7 +45,6 @@ func CreatePRInDir(ctx context.Context, workDir, title, body, baseBranch string)
 		return nil, fmt.Errorf("gh pr create failed: %w\nstderr: %s", err, stderr.String())
 	}
 
-	// gh pr create outputs the PR URL
 	prURL := strings.TrimSpace(stdout.String())
 
 	return &PRResult{

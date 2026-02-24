@@ -672,7 +672,7 @@ func (a *Agent) stepCreatePR(ctx context.Context, wc *workContext) (*WorkResult,
 	}
 
 	fmt.Println("   🔗 Running: gh pr create")
-	prResult, err := github.CreatePRInDir(ctx, wc.worktree.Path, wc.task.GetTitle(), prBody, a.config.BaseBranch)
+	prResult, err := github.CreatePRInDir(ctx, wc.worktree.Path, wc.task.GetTitle(), prBody, a.config.BaseBranch, a.config.PR.Flags...)
 	if err != nil {
 		events.AgentCompleted(agentID, "Create PR", "failed")
 		return nil, fmt.Errorf("failed to create PR: %w", err)

@@ -246,7 +246,7 @@ claude:
 | Model | ID | Best For |
 |-------|----|----------|
 | **Claude Opus 4.6** | `claude-opus-4-6` | Highest quality — complex planning, nuanced code generation, thorough review |
-| **Claude Sonnet 4.5** | `claude-sonnet-4.5` | Good balance of quality and cost |
+| **Claude Sonnet 4.5** | `claude-sonnet-4-5` | Good balance of quality and cost |
 | **Claude Haiku 4** | `claude-haiku-4` | Fast, cheap — simple validation and parsing tasks |
 
 #### Example Configurations
@@ -267,10 +267,10 @@ claude:
 ```yaml
 claude:
   models:
-    planner: claude-sonnet-4.5
-    executor: claude-sonnet-4.5
-    reviewer: claude-sonnet-4.5
-    refactor: claude-sonnet-4.5
+    planner: claude-sonnet-4-5
+    executor: claude-sonnet-4-5
+    reviewer: claude-sonnet-4-5
+    refactor: claude-sonnet-4-5
     preflight: claude-haiku-4
     test_runner: claude-haiku-4
 ```
@@ -279,8 +279,8 @@ claude:
 ```yaml
 claude:
   models:
-    planner: claude-sonnet-4.5
-    executor: claude-sonnet-4.5
+    planner: claude-sonnet-4-5
+    executor: claude-sonnet-4-5
     reviewer: claude-haiku-4
     refactor: claude-haiku-4
     preflight: claude-haiku-4
@@ -406,13 +406,13 @@ claude:
   enable_prompt_caching: true        # Enable prompt caching (reduces costs 50-90%)
 
   # Multi-model strategy: Use different models per agent type
-  # Available models: claude-opus-4-6, claude-sonnet-4.5, claude-haiku-4
+  # Available models: claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4
   # See "Model Configuration" section below for details and examples
   models:
-    planner: claude-sonnet-4.5       # Complex planning & codebase analysis
-    executor: claude-sonnet-4.5      # Code generation
-    reviewer: claude-sonnet-4.5      # Quality review
-    refactor: claude-sonnet-4.5      # Fixing review issues
+    planner: claude-sonnet-4-5       # Complex planning & codebase analysis
+    executor: claude-sonnet-4-5      # Code generation
+    reviewer: claude-sonnet-4-5      # Quality review
+    refactor: claude-sonnet-4-5      # Fixing review issues
     preflight: claude-haiku-4        # Fast validation (90% cheaper)
     test_runner: claude-haiku-4      # Simple test output parsing (90% cheaper)
 
